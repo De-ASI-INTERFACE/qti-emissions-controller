@@ -1,0 +1,29 @@
+{
+  "name": "qti-emissions-controller",
+  "version": "1.0.0",
+  "description": "QTI Protocol Emissions Controller — Squads-gated staking reward minting on Solana",
+  "scripts": {
+    "build": "anchor build",
+    "test": "anchor test",
+    "test:localnet": "anchor test --provider.cluster localnet",
+    "deploy:mainnet": "anchor deploy --provider.cluster mainnet-beta",
+    "verify": "solana-verify verify-from-repo --url https://api.mainnet-beta.solana.com --program-id EMiSCtRL1QTIDeASIInterface111111111111111111 --mount-path programs/qti_emissions_controller --library-name qti_emissions_controller https://github.com/De-ASI-INTERFACE/qti-emissions-controller",
+    "lint": "cargo clippy -- -D warnings",
+    "fmt": "cargo fmt --all",
+    "fmt:check": "cargo fmt --all -- --check"
+  },
+  "devDependencies": {
+    "@coral-xyz/anchor": "^0.30.1",
+    "@solana/web3.js": "^1.95.3",
+    "@solana/spl-token": "^0.4.6",
+    "@sqds/multisig": "^2.1.4",
+    "chai": "^4.3.4",
+    "mocha": "^9.0.3",
+    "ts-mocha": "^10.0.0",
+    "typescript": "^5.0.0",
+    "@types/chai": "^4.3.5",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.0.0"
+  },
+  "license": "Apache-2.0"
+}
