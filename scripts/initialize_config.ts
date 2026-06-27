@@ -1,85 +1,105 @@
 /**
- * initialize_config.ts
+ * QTI Emissions Controller — Initialize Config Script
  *
- * Submits the one-time EmissionsConfig initialization via Squads vault transaction.
- * Run AFTER:
- *   1. Program deployed to mainnet
- *   2. QTI mint_authority transferred to emissions_authority PDA
+ * Author: Richard Arlie Charles Patterson
+ * Copyright: © 2026 Richard Arlie Charles Patterson
+ * Identifier: RP-DEASI-EMISSIONS-2026-0627-001
  *
- * Usage: ANCHOR_PROVIDER_URL=https://api.mainnet-beta.solana.com \
- *        ANCHOR_WALLET=~/.config/solana/id.json \
- *        yarn ts-node scripts/initialize_config.ts
- *
- * RP-DEASI-EMISSIONS-2026-0627-001
+ * Run ONCE after anchor deploy to mainnet.
+ * Transfers mint_authority to emissions_authority PDA first,
+ * then calls initialize_config.
  */
 
 import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  createSetAuthorityInstruction,
+  AuthorityType,
+} from "@solana/spl-token";
+import { QtiEmissionsController } from "../target/types/qti_emissions_controller";
 
+// ── Config ──────────────────────────────────────────────────────────────────
 const PROGRAM_ID   = new PublicKey("EMiSCtRL1QTIDeASIInterface111111111111111111");
-const QTI_MINT     = new PublicKey(process.env.QTI_MINT    ?? "");
-const SQUADS_VAULT = new PublicKey(process.env.SQUADS_VAULT ?? "");
+const QTI_MINT     = new PublicKey(process.env.QTI_MINT!);
+const SQUADS_VAULT = new PublicKey(process.env.SQUADS_VAULT!);
 
-// Emission schedule — adjust to final tokenomics before mainnet
-const EPOCH_DURATION_SLOTS   = new anchor.BN(216_000);           // ~1 day
-const MAX_EMISSION_PER_EPOCH = new anchor.BN(
-  Number(process.env.MAX_PER_EPOCH ?? 100_000) * 1e9
-);
-const TOTAL_EMISSION_CAP     = new anchor.BN(
-  Number(process.env.TOTAL_CAP ?? 200_000_000) * 1e9
-);
+// Emission parameters (adjust before deploy)
+const EPOCH_DURATION_SLOTS   = BigInt(216_000);   // ~24 hours at 2.5 slots/sec
+const MAX_EMISSION_PER_EPOCH = BigInt(100_000_000_000); // 100,000 QTI (6 decimals)
+const TOTAL_EMISSION_CAP     = BigInt(1_000_000_000_000_000); // 1B QTI lifetime
 
 async function main() {
-  if (!process.env.QTI_MINT || !process.env.SQUADS_VAULT) {
-    throw new Error("QTI_MINT and SQUADS_VAULT env vars required");
-  }
-
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.QtiEmissionsController;
 
-  const [emissionsAuthority] = PublicKey.findProgramAddressSync(
-    [Buffer.from("emissions_authority")], PROGRAM_ID
+  const program = anchor.workspace
+    .QtiEmissionsController as Program<QtiEmissionsController>;
+
+  // Derive PDAs
+  const [emissionsAuthority, authorityBump] =
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("emissions_authority")],
+      PROGRAM_ID
+    );
+
+  const [emissionsConfig, configBump] =
+    PublicKey.findProgramAddressSync(
+      [Buffer.from("emissions_config"), QTI_MINT.toBuffer()],
+      PROGRAM_ID
+    );
+
+  console.log("emissions_authority PDA:", emissionsAuthority.toBase58());
+  console.log("emissions_config PDA:   ", emissionsConfig.toBase58());
+  console.log("Authority bump:         ", authorityBump);
+  console.log("Config bump:            ", configBump);
+
+  // Step 1: Transfer mint_authority to emissions_authority PDA
+  console.log("\nStep 1: Transferring mint_authority to emissions_authority PDA...");
+  const setAuthIx = createSetAuthorityInstruction(
+    QTI_MINT,
+    provider.wallet.publicKey,
+    AuthorityType.MintTokens,
+    emissionsAuthority,
+    [],
+    TOKEN_PROGRAM_ID
   );
-  const [emissionsConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from("emissions_config"), QTI_MINT.toBuffer()], PROGRAM_ID
-  );
+  const tx1 = new anchor.web3.Transaction().add(setAuthIx);
+  const sig1 = await provider.sendAndConfirm(tx1);
+  console.log("mint_authority transferred. Tx:", sig1);
 
-  console.log("=== QTI Emissions Controller — initialize_config ===");
-  console.log("Program ID:          ", PROGRAM_ID.toBase58());
-  console.log("QTI Mint:            ", QTI_MINT.toBase58());
-  console.log("Squads Vault:        ", SQUADS_VAULT.toBase58());
-  console.log("emissions_authority: ", emissionsAuthority.toBase58());
-  console.log("emissions_config:    ", emissionsConfig.toBase58());
-  console.log("epoch_duration_slots:", EPOCH_DURATION_SLOTS.toString());
-  console.log("max_per_epoch:       ", MAX_EMISSION_PER_EPOCH.toString());
-  console.log("total_cap:           ", TOTAL_EMISSION_CAP.toString());
-  console.log("");
-
-  const tx = await program.methods
+  // Step 2: Initialize config
+  console.log("\nStep 2: Initializing emissions config...");
+  const sig2 = await program.methods
     .initializeConfig(
-      EPOCH_DURATION_SLOTS,
-      MAX_EMISSION_PER_EPOCH,
-      TOTAL_EMISSION_CAP
+      new anchor.BN(EPOCH_DURATION_SLOTS.toString()),
+      new anchor.BN(MAX_EMISSION_PER_EPOCH.toString()),
+      new anchor.BN(TOTAL_EMISSION_CAP.toString())
     )
     .accounts({
-      squadsVault:       SQUADS_VAULT,
-      qtiMint:           QTI_MINT,
+      squadsVault:      SQUADS_VAULT,
+      qtiMint:          QTI_MINT,
       emissionsConfig,
       emissionsAuthority,
-      payer:             provider.wallet.publicKey,
-      systemProgram:     SystemProgram.programId,
-      tokenProgram:      TOKEN_PROGRAM_ID,
+      payer:            provider.wallet.publicKey,
+      systemProgram:    SystemProgram.programId,
+      tokenProgram:     TOKEN_PROGRAM_ID,
     })
-    .rpc({ commitment: "confirmed" });
+    .rpc();
 
-  console.log("✅ EmissionsConfig initialized.");
-  console.log("Tx signature:", tx);
-  console.log("Solana Explorer:", `https://explorer.solana.com/tx/${tx}`);
-  console.log("");
-  console.log("ACTION REQUIRED: Commit this tx signature to:");
-  console.log("  docs/MULTISIG_MIGRATION.md in De-ASI-INTERFACE/QTI-token");
+  console.log("EmissionsConfig initialized. Tx:", sig2);
+  console.log("\n✅ QTI Emissions Controller anchored and live on mainnet.");
+  console.log("   Program:   ", PROGRAM_ID.toBase58());
+  console.log("   Mint:      ", QTI_MINT.toBase58());
+  console.log("   Authority: ", SQUADS_VAULT.toBase58());
+  console.log("   Identifier: RP-DEASI-EMISSIONS-2026-0627-001");
+  console.log("   Author:     Richard Arlie Charles Patterson");
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

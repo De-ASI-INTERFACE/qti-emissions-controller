@@ -1,0 +1,154 @@
+name: QTI Emissions Controller — Anchor Build & Deploy
+
+# Author: Richard Arlie Charles Patterson
+# Copyright: © 2026 Richard Arlie Charles Patterson
+# Identifier: RP-DEASI-EMISSIONS-2026-0627-001
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy to mainnet? (yes/no)'
+        required: true
+        default: 'no'
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ============================================================
+  # Stage 1: Build and verify the Anchor program
+  # ============================================================
+  build:
+    name: Build QTI Emissions Controller
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wsbpf-unknown-unknown
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build Anchor program
+        run: anchor build
+
+      - name: Verify program ID
+        run: |
+          PROGRAM_ID=$(anchor keys list | grep qti_emissions_controller | awk '{print $2}')
+          echo "Detected program ID: $PROGRAM_ID"
+          if [ "$PROGRAM_ID" != "EMiSCtRL1QTIDeASIInterface111111111111111111" ]; then
+            echo "ERROR: Program ID mismatch"
+            exit 1
+          fi
+          echo "✅ Program ID verified: $PROGRAM_ID"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qti-emissions-controller-build
+          path: target/deploy/
+          retention-days: 30
+
+  # ============================================================
+  # Stage 2: Run tests
+  # ============================================================
+  test:
+    name: Test QTI Emissions Controller
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run Anchor tests (localnet)
+        run: anchor test
+
+  # ============================================================
+  # Stage 3: Deploy to mainnet (manual trigger only)
+  # ============================================================
+  deploy:
+    name: Deploy to Mainnet
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'yes'
+    environment: mainnet
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Restore deployer wallet
+        run: |
+          mkdir -p ~/.config/solana
+          echo "${{ secrets.DEPLOYER_KEYPAIR }}" > ~/.config/solana/id.json
+
+      - name: Build program
+        run: anchor build
+
+      - name: Deploy to mainnet
+        run: anchor deploy --provider.cluster mainnet
+        env:
+          ANCHOR_WALLET: ~/.config/solana/id.json
+
+      - name: Confirm deployment
+        run: |
+          solana program show EMiSCtRL1QTIDeASIInterface111111111111111111 \
+            --url mainnet-beta
+          echo "✅ QTI Emissions Controller deployed."
+          echo "   Program:    EMiSCtRL1QTIDeASIInterface111111111111111111"
+          echo "   Deployer:   CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my"
+          echo "   Author:     Richard Arlie Charles Patterson"
+          echo "   Identifier: RP-DEASI-EMISSIONS-2026-0627-001"
