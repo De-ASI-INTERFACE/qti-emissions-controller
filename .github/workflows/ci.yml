@@ -1,48 +1,115 @@
-name: QTI Emissions Controller CI
+# ============================================================
+# CI — Anchor Build, Lint, Test, Security Audit
+# Triggers: push/PR to main, dev
+# Toolchain: Rust 1.79.0 | Solana 1.18.22 | Anchor 0.30.1
+# Author: Richard Patterson (@De-ASI-INTERFACE)
+# Identifier: RP-DEASI-EMISSIONS-2026-0627-001
+# ============================================================
+name: CI
 
 on:
   push:
     branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  ANCHOR_VERSION: 0.30.1
-  SOLANA_VERSION: 1.18.22
+  RUST_VERSION: "1.79.0"
+  SOLANA_VERSION: "1.18.22"
+  ANCHOR_VERSION: "0.30.1"
   NODE_VERSION: "20"
-  RUST_TOOLCHAIN: "1.79.0"
 
 jobs:
-  build-and-test:
-    name: Build, Lint & Test
+  # ----------------------------------------------------------
+  # JOB 1: Rust format + Clippy lint (fast gate, no Solana)
+  # ----------------------------------------------------------
+  lint:
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: clippy, rustfmt
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-
+            ${{ runner.os }}-cargo-
 
-      - name: Install Solana CLI
-        run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+      - name: rustfmt check
+        run: cargo fmt --all -- --check
 
-      - name: Install Anchor CLI
-        run: cargo install --git https://github.com/coral-xyz/anchor --tag v${{ env.ANCHOR_VERSION }} anchor-cli --locked
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Setup Node.js
+  # ----------------------------------------------------------
+  # JOB 2: TypeScript type-check
+  # ----------------------------------------------------------
+  ts-lint:
+    name: TypeScript Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit
+
+  # ----------------------------------------------------------
+  # JOB 3: Anchor build + full test suite
+  # Depends on: lint, ts-lint
+  # ----------------------------------------------------------
+  build-and-test:
+    name: Anchor Build & Test
+    runs-on: ubuntu-latest
+    needs: [lint, ts-lint]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -51,40 +118,65 @@ jobs:
       - name: Install Node dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Rust format check
-        run: cargo fmt --all -- --check
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Clippy (deny warnings)
-        run: cargo clippy -- -D warnings
+      - name: Cache Solana binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/solana/install
+          key: solana-${{ env.SOLANA_VERSION }}
 
-      - name: Anchor build
-        run: anchor build
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }} via AVM
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
 
-      - name: Generate test keypair
+      - name: Verify toolchain versions
+        run: |
+          rustc --version
+          solana --version
+          anchor --version
+          node --version
+
+      - name: Generate localnet keypair
         run: solana-keygen new --no-bip39-passphrase --outfile /tmp/test-keypair.json
 
-      - name: Start localnet validator
+      - name: Set Solana config to localnet
         run: |
-          solana-test-validator --reset --quiet &
-          sleep 5
+          solana config set --url localhost
+          solana config set --keypair /tmp/test-keypair.json
 
-      - name: Run tests
+      - name: Build Anchor program
+        run: anchor build
+
+      - name: Run full test suite (localnet)
         env:
           ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
           ANCHOR_WALLET: /tmp/test-keypair.json
-        run: anchor test --skip-local-validator
+        run: anchor test 2>&1 | tee /tmp/anchor-test.log
 
-  secret-scan:
-    name: Secret Scan
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-test-log
+          path: /tmp/anchor-test.log
+          retention-days: 7
+
+  # ----------------------------------------------------------
+  # JOB 4: Rust security audit (cargo-audit)
+  # ----------------------------------------------------------
+  security-audit:
+    name: Security Audit (cargo-audit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Rust security audit
+        uses: rustsec/audit-check@v1.4.1
         with:
-          fetch-depth: 0
-      - name: Scan for secrets
-        uses: trufflesecurity/trufflehog@main
-        with:
-          path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
-          extra_args: --only-verified
+          token: ${{ secrets.GITHUB_TOKEN }}

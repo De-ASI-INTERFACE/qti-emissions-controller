@@ -1,72 +1,87 @@
-name: QTI Emissions Controller — Anchor Build & Deploy
-
-# Author: Richard Arlie Charles Patterson
-# Copyright: © 2026 Richard Arlie Charles Patterson
+# ============================================================
+# Anchor Deploy — Manual mainnet deployment with full safety gates
+# Triggered ONLY by workflow_dispatch with explicit 'yes' confirmation.
+# Requires: DEPLOYER_KEYPAIR secret set in repo/environment settings.
+# Author: Richard Arlie Charles Patterson (@De-ASI-INTERFACE)
 # Identifier: RP-DEASI-EMISSIONS-2026-0627-001
+# ============================================================
+name: Anchor Deploy
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       deploy:
-        description: 'Deploy to mainnet? (yes/no)'
+        description: 'Deploy to mainnet? Type YES to confirm (case-sensitive)'
         required: true
         default: 'no'
+      program_id:
+        description: 'Expected program ID to verify against (post-anchor-deploy)'
+        required: true
 
 permissions:
   contents: read
 
-jobs:
+env:
+  RUST_VERSION: "1.79.0"
+  SOLANA_VERSION: "1.18.22"
+  ANCHOR_VERSION: "0.30.1"
+  NODE_VERSION: "20"
+  DEPLOYER_WALLET: ~/.config/solana/id.json
 
-  # ============================================================
-  # Stage 1: Build and verify the Anchor program
-  # ============================================================
+jobs:
+  # ----------------------------------------------------------
+  # Stage 1: Build and verify
+  # ----------------------------------------------------------
   build:
     name: Build QTI Emissions Controller
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
         with:
-          targets: wsbpf-unknown-unknown
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install Solana CLI
-        run: |
-          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-
-      - name: Install Anchor CLI
-        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
 
       - name: Install Node dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Build Anchor program
-        run: anchor build
-
-      - name: Verify program ID
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
         run: |
-          PROGRAM_ID=$(anchor keys list | grep qti_emissions_controller | awk '{print $2}')
-          echo "Detected program ID: $PROGRAM_ID"
-          if [ "$PROGRAM_ID" != "EMiSCtRL1QTIDeASIInterface111111111111111111" ]; then
-            echo "ERROR: Program ID mismatch"
-            exit 1
-          fi
-          echo "✅ Program ID verified: $PROGRAM_ID"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: rustfmt check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Anchor build
+        run: anchor build
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -75,80 +90,151 @@ jobs:
           path: target/deploy/
           retention-days: 30
 
-  # ============================================================
-  # Stage 2: Run tests
-  # ============================================================
+  # ----------------------------------------------------------
+  # Stage 2: Full test suite (must pass before any deploy)
+  # ----------------------------------------------------------
   test:
     name: Test QTI Emissions Controller
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Install Solana CLI
-        run: |
-          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install Anchor CLI
-        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
 
       - name: Install Node dependencies
         run: yarn install --frozen-lockfile
+
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: Generate test keypair
+        run: solana-keygen new --no-bip39-passphrase --outfile /tmp/test-keypair.json
 
       - name: Run Anchor tests (localnet)
-        run: anchor test
+        env:
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+          ANCHOR_WALLET: /tmp/test-keypair.json
+        run: anchor test 2>&1 | tee /tmp/deploy-test.log
 
-  # ============================================================
-  # Stage 3: Deploy to mainnet (manual trigger only)
-  # ============================================================
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-deploy-test-log
+          path: /tmp/deploy-test.log
+          retention-days: 30
+
+  # ----------------------------------------------------------
+  # Stage 3: Mainnet deploy — manual YES required, both gates must pass
+  # ----------------------------------------------------------
   deploy:
-    name: Deploy to Mainnet
+    name: Deploy to Mainnet-Beta
     runs-on: ubuntu-latest
     needs: [build, test]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'yes'
+    if: github.event.inputs.deploy == 'YES'
     environment: mainnet
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Install Solana CLI
-        run: |
-          sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install Anchor CLI
-        run: cargo install --git https://github.com/coral-xyz/anchor anchor-cli --locked
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
 
       - name: Install Node dependencies
         run: yarn install --frozen-lockfile
+
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
 
       - name: Restore deployer wallet
         run: |
           mkdir -p ~/.config/solana
-          echo "${{ secrets.DEPLOYER_KEYPAIR }}" > ~/.config/solana/id.json
+          echo '${{ secrets.DEPLOYER_KEYPAIR }}' > ${{ env.DEPLOYER_WALLET }}
+          chmod 600 ${{ env.DEPLOYER_WALLET }}
 
       - name: Build program
         run: anchor build
 
-      - name: Deploy to mainnet
-        run: anchor deploy --provider.cluster mainnet
+      - name: Deploy to mainnet-beta
+        run: anchor deploy --provider.cluster mainnet-beta
         env:
-          ANCHOR_WALLET: ~/.config/solana/id.json
+          ANCHOR_WALLET: ${{ env.DEPLOYER_WALLET }}
 
-      - name: Confirm deployment
+      - name: Verify deployed program ID
         run: |
-          solana program show EMiSCtRL1QTIDeASIInterface111111111111111111 \
-            --url mainnet-beta
-          echo "✅ QTI Emissions Controller deployed."
-          echo "   Program:    EMiSCtRL1QTIDeASIInterface111111111111111111"
-          echo "   Deployer:   CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my"
-          echo "   Author:     Richard Arlie Charles Patterson"
-          echo "   Identifier: RP-DEASI-EMISSIONS-2026-0627-001"
+          EXPECTED="${{ github.event.inputs.program_id }}"
+          ACTUAL=$(anchor keys list | grep qti_emissions_controller | awk '{print $2}')
+          echo "Expected: $EXPECTED"
+          echo "Actual:   $ACTUAL"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Program ID mismatch — deploy may have failed or used wrong keypair"
+            exit 1
+          fi
+          echo "Program ID verified: $ACTUAL"
+
+      - name: Confirm on-chain state
+        run: |
+          solana program show ${{ github.event.inputs.program_id }} \
+            --url https://api.mainnet-beta.solana.com
+          echo "Deployer:   CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my"
+          echo "Author:     Richard Arlie Charles Patterson"
+          echo "Identifier: RP-DEASI-EMISSIONS-2026-0627-001"
+        env:
+          ANCHOR_WALLET: ${{ env.DEPLOYER_WALLET }}
+
+      - name: Scrub deployer wallet from runner
+        if: always()
+        run: shred -u ${{ env.DEPLOYER_WALLET }} || rm -f ${{ env.DEPLOYER_WALLET }}

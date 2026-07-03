@@ -1,0 +1,108 @@
+# ============================================================
+# Release — Tag-triggered verified release
+# Triggered by: git tag v*.*.*
+# Author: Richard Patterson (@De-ASI-INTERFACE)
+# Identifier: RP-DEASI-EMISSIONS-2026-0627-001
+# ============================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  RUST_VERSION: "1.79.0"
+  SOLANA_VERSION: "1.18.22"
+  ANCHOR_VERSION: "0.30.1"
+  NODE_VERSION: "20"
+
+jobs:
+  verify-build:
+    name: Verify Release Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: rustfmt check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Anchor build
+        run: anchor build
+
+      - name: Anchor test
+        run: anchor test
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: verify-build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: QTI Emissions Controller ${{ github.ref_name }}
+          body: |
+            ## QTI Emissions Controller — ${{ github.ref_name }}
+
+            **Program:** Squads-gated rate-limited SPL emissions
+            **Stack:** Rust ${{ env.RUST_VERSION }} / Anchor ${{ env.ANCHOR_VERSION }} / Solana ${{ env.SOLANA_VERSION }}
+            **Author:** Richard Patterson (@De-ASI-INTERFACE)
+            **Identifier:** RP-DEASI-EMISSIONS-2026-0627-001
+
+            All programs verified with `anchor build` and `anchor test` before this release.
+
+            ### On-Chain Verification
+            ```bash
+            solana-verify verify-from-repo \
+              --url https://api.mainnet-beta.solana.com \
+              --program-id <PROGRAM_ID> \
+              https://github.com/De-ASI-INTERFACE/qti-emissions-controller
+            ```
+          draft: false
+          prerelease: false
+          generate_release_notes: true
