@@ -10,12 +10,13 @@ jobs:
   build-and-test:
     name: Anchor Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust (pinned)
+      - name: Install Rust (stable, pinned)
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -32,17 +33,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Solana CLI (1.18.x)
+      - name: Install Solana CLI (1.18.26)
         run: |
           sh -c "$(curl -sSfL https://release.solana.com/v1.18.26/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Install Anchor CLI (0.30.1)
+      - name: Setup Solana keypair for CI
         run: |
-          npm install -g @coral-xyz/anchor-cli@0.30.1
+          mkdir -p ~/.config/solana
+          solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/id.json
+          solana config set --url http://127.0.0.1:8899
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install Anchor CLI (0.30.1)
+        run: npm install -g @coral-xyz/anchor-cli@0.30.1
 
       - name: Install Node dependencies
-        run: npm ci
+        run: yarn install --frozen-lockfile
 
       - name: Rust fmt check
         run: cargo fmt --all -- --check
@@ -53,10 +65,32 @@ jobs:
       - name: Anchor build
         run: anchor build
 
-      - name: Anchor test (localnet)
-        run: anchor test --skip-local-validator
-
-      - name: Verify program binary checksum
+      - name: Record program binary checksums
         run: |
-          echo "Program ID: EMiSCtRL1QTIDeASIInterface111111111111111111"
+          echo "=== qti_emissions_controller ==="
           sha256sum target/deploy/qti_emissions_controller.so
+          echo "=== qti_developer_credits ==="
+          sha256sum target/deploy/qti_developer_credits.so
+
+      - name: Start solana-test-validator with both programs
+        run: |
+          solana-test-validator \
+            --bpf-program EMiSCtRL1QTIDeASIInterface111111111111111111 \
+              target/deploy/qti_emissions_controller.so \
+            --bpf-program 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv \
+              target/deploy/qti_developer_credits.so \
+            --reset \
+            --quiet &
+          sleep 8
+          solana airdrop 100 --url http://127.0.0.1:8899 || true
+
+      - name: Verify programs are deployed on localnet
+        run: |
+          solana program show EMiSCtRL1QTIDeASIInterface111111111111111111 --url http://127.0.0.1:8899
+          solana program show 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv --url http://127.0.0.1:8899
+
+      - name: Run Anchor tests (skip-deploy — programs already loaded)
+        run: anchor test --skip-local-validator --skip-deploy
+        env:
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+          ANCHOR_WALLET: ~/.config/solana/id.json
