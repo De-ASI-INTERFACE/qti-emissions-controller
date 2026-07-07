@@ -10,11 +10,15 @@ qti_developer_credits     = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
 qti_emissions_controller  = "EMiSCtRL1QTIDeASIInterface111111111111111111"
 qti_developer_credits     = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
 
+[programs.devnet]
+qti_emissions_controller  = "EMiSCtRL1QTIDeASIInterface111111111111111111"
+qti_developer_credits     = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "mainnet"
+cluster = "localnet"
 wallet  = "~/.config/solana/id.json"
 
 [scripts]
