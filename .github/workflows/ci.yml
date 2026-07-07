@@ -44,10 +44,10 @@ jobs:
           solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/id.json
           solana config set --url http://127.0.0.1:8899
 
-      - name: Install Node.js 20
+      - name: Install Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'yarn'
 
       - name: Install Anchor CLI (0.30.1)
