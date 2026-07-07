@@ -11,18 +11,32 @@
 //!   6. All arithmetic uses checked operations — no overflow/underflow
 //!   7. Mint authority validated on every emit_rewards call
 //!   8. Full on-chain event emission for off-chain monitoring (Grafana)
+//!   9. Gini gate enforced on every emit_rewards via qti_developer_credits CPI read
 //!
 //! RP-DEASI-EMISSIONS-2026-0627-001
 //! Author: Richard Patterson (@De-ASI-INTERFACE)
 //! Deployer: CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my
+//!
+//! Inequality controller (qti_developer_credits):
+//!   Program ID: 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv
+//!   Doc ID:     RP-DEASI-INEQUALITY-2026-0707-001
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
 declare_id!("EMiSCtRL1QTIDeASIInterface111111111111111111");
 
-pub const EMISSIONS_AUTHORITY_SEED: &[u8] = b"emissions_authority";
-pub const EMISSIONS_CONFIG_SEED:    &[u8] = b"emissions_config";
+/// Program ID of the qti_developer_credits inequality controller.
+/// This program owns InequalityControllerState and exposes gini_gate_open.
+/// Referenced here for account ownership validation in EmitRewards.
+pub const DEVELOPER_CREDITS_PROGRAM_ID: &str =
+    "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv";
+
+pub const EMISSIONS_AUTHORITY_SEED:    &[u8] = b"emissions_authority";
+pub const EMISSIONS_CONFIG_SEED:       &[u8] = b"emissions_config";
+/// Seed used by qti_developer_credits to derive InequalityControllerState PDA.
+/// Kept here so EmitRewards can validate the account address without a CPI call.
+pub const CONTROLLER_STATE_SEED:       &[u8] = b"developer_credits_state";
 
 /// Maximum configurable epoch duration (30 days in slots)
 pub const MAX_EPOCH_DURATION_SLOTS: u64 = 6_480_000;
@@ -99,12 +113,33 @@ pub mod qti_emissions_controller {
 
     /// Mint staking rewards to a recipient token account.
     /// Enforces per-epoch rate limit, lifetime cap, pause state,
-    /// and validates mint authority on every call.
+    /// mint authority validity, AND the Gini gate from qti_developer_credits.
     pub fn emit_rewards(ctx: Context<EmitRewards>, amount: u64) -> Result<()> {
         require!(amount > 0, EmissionsError::ZeroAmount);
 
         let config = &mut ctx.accounts.emissions_config;
         require!(!config.paused, EmissionsError::EmissionsPaused);
+
+        // ── Gini gate check ────────────────────────────────────────────────
+        // Read gini_gate_open from the qti_developer_credits controller state.
+        // If the gate is closed (G_current > G_target + tolerance), block mint.
+        // The gate account is validated by PDA derivation in EmitRewards accounts.
+        let gate_open = ctx.accounts.gini_controller_state.gini_gate_open;
+        if !gate_open {
+            emit!(InequalityGateBlocked {
+                epoch_index:  ctx.accounts.gini_controller_state.epoch_index,
+                current_gini: ctx.accounts.gini_controller_state.current_gini,
+                g_target:     ctx.accounts.gini_controller_state.g_target,
+                slot:         Clock::get()?.slot,
+                timestamp:    Clock::get()?.unix_timestamp,
+            });
+            msg!(
+                "InequalityGateBlocked: gini={} g_target={}",
+                ctx.accounts.gini_controller_state.current_gini,
+                ctx.accounts.gini_controller_state.g_target
+            );
+            return err!(EmissionsError::InequalityGateViolated);
+        }
 
         let clock = Clock::get()?;
 
@@ -185,7 +220,6 @@ pub mod qti_emissions_controller {
 
         if let Some(v) = new_max_emission_per_epoch {
             require!(v > 0, EmissionsError::InvalidEmissionCap);
-            // New per-epoch cap must not exceed total cap
             require!(v <= config.total_emission_cap, EmissionsError::InvalidEmissionCap);
             config.max_emission_per_epoch = v;
         }
@@ -197,7 +231,6 @@ pub mod qti_emissions_controller {
             config.epoch_duration_slots = v;
         }
         if let Some(v) = new_total_emission_cap {
-            // Total cap can only be reduced, never increased — prevents governance inflation attack
             require!(v >= config.total_minted, EmissionsError::CapBelowMinted);
             require!(v >= config.max_emission_per_epoch, EmissionsError::InvalidEmissionCap);
             config.total_emission_cap = v;
@@ -215,7 +248,6 @@ pub mod qti_emissions_controller {
     }
 
     /// Emergency pause — halts all emit_rewards calls immediately.
-    /// Only Squads vault authority. Emits on-chain event for monitoring.
     pub fn pause_emissions(ctx: Context<UpdateConfig>) -> Result<()> {
         require!(!ctx.accounts.emissions_config.paused, EmissionsError::AlreadyPaused);
         ctx.accounts.emissions_config.paused = true;
@@ -229,7 +261,6 @@ pub mod qti_emissions_controller {
     }
 
     /// Resume emissions after governance review.
-    /// Only Squads vault authority.
     pub fn resume_emissions(ctx: Context<UpdateConfig>) -> Result<()> {
         require!(ctx.accounts.emissions_config.paused, EmissionsError::NotPaused);
         ctx.accounts.emissions_config.paused = false;
@@ -243,7 +274,6 @@ pub mod qti_emissions_controller {
     }
 
     /// Transfer governance authority to a new Squads vault.
-    /// Requires current authority signature. Irreversible without new authority.
     pub fn transfer_authority(
         ctx: Context<TransferAuthority>,
         new_authority: Pubkey,
@@ -274,11 +304,9 @@ pub struct InitializeConfig<'info> {
     /// CHECK: Validated by storing key in EmissionsConfig.authority.
     pub squads_vault: UncheckedAccount<'info>,
 
-    /// QTI SPL token mint. mint_authority must equal emissions_authority PDA.
     #[account(mut)]
     pub qti_mint: Account<'info, Mint>,
 
-    /// Singleton config — PDA keyed on mint ensures one config per token.
     #[account(
         init,
         payer  = payer,
@@ -288,7 +316,6 @@ pub struct InitializeConfig<'info> {
     )]
     pub emissions_config: Account<'info, EmissionsConfig>,
 
-    /// Program-derived mint authority — no private key.
     /// CHECK: PDA derivation guarantees only this program can sign.
     #[account(seeds = [EMISSIONS_AUTHORITY_SEED], bump)]
     pub emissions_authority: UncheckedAccount<'info>,
@@ -298,6 +325,35 @@ pub struct InitializeConfig<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program:  Program<'info, Token>,
+}
+
+/// GiniControllerState is a zero-copy view of the InequalityControllerState
+/// account owned by qti_developer_credits (9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv).
+/// Only gini_gate_open, epoch_index, current_gini, and g_target are read;
+/// the account is never mutated by this program.
+#[account]
+pub struct GiniControllerState {
+    /// Squads vault authority (32)
+    pub _authority:                [u8; 32],
+    /// QTI mint (32)
+    pub _qti_mint:                 [u8; 32],
+    /// epoch_duration_slots (8)
+    pub _epoch_duration_slots:     u64,
+    /// g_target scaled ×10_000 (8)
+    pub g_target:                  u64,
+    /// k scaled ×10_000 (8)
+    pub _k:                        u64,
+    /// theta scaled ×10_000 (8)
+    pub _theta:                    u64,
+    /// current_gini scaled ×10_000 (8)
+    pub current_gini:              u64,
+    /// Gate flag — true means emissions are permitted (1)
+    pub gini_gate_open:            bool,
+    /// current_epoch_start slot (8)
+    pub _current_epoch_start:      u64,
+    /// epoch_index (8)
+    pub epoch_index:               u64,
+    // histogram, totals, timestamps, flags, bump follow — not read here
 }
 
 #[derive(Accounts)]
@@ -318,8 +374,6 @@ pub struct EmitRewards<'info> {
     )]
     pub emissions_authority: UncheckedAccount<'info>,
 
-    /// Validate mint_authority is still the PDA on every call.
-    /// If Squads revokes the PDA's authority, this constraint immediately rejects.
     #[account(
         mut,
         constraint = qti_mint.mint_authority
@@ -335,6 +389,16 @@ pub struct EmitRewards<'info> {
             @ EmissionsError::MintMismatch
     )]
     pub recipient_token_account: Account<'info, TokenAccount>,
+
+    /// InequalityControllerState PDA owned by qti_developer_credits.
+    /// Validated by seeds — ensures this is the canonical controller for this mint.
+    /// Read-only: only gini_gate_open is consumed; never mutated here.
+    #[account(
+        seeds  = [CONTROLLER_STATE_SEED, qti_mint.key().as_ref()],
+        bump,
+        owner  = DEVELOPER_CREDITS_PROGRAM_ID.parse::<Pubkey>().unwrap()
+    )]
+    pub gini_controller_state: Account<'info, GiniControllerState>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -371,29 +435,17 @@ pub struct TransferAuthority<'info> {
 
 #[account]
 pub struct EmissionsConfig {
-    /// Squads vault PDA — sole reconfiguration authority
     pub authority:              Pubkey,
-    /// QTI SPL mint this config governs
     pub qti_mint:               Pubkey,
-    /// Slot length of each emission epoch
     pub epoch_duration_slots:   u64,
-    /// Maximum raw token units mintable per epoch
     pub max_emission_per_epoch: u64,
-    /// Absolute lifetime maximum across all epochs
     pub total_emission_cap:     u64,
-    /// Running total of all tokens minted by this program
     pub total_minted:           u64,
-    /// Slot when current epoch started
     pub current_epoch_start:    u64,
-    /// Tokens minted in current epoch
     pub current_epoch_minted:   u64,
-    /// Unix timestamp of initialization
     pub initialized_at:         i64,
-    /// Emergency pause flag
     pub paused:                 bool,
-    /// PDA bump for emissions_config
     pub bump:                   u8,
-    /// PDA bump for emissions_authority (mint signer)
     pub authority_bump:         u8,
 }
 
@@ -470,6 +522,17 @@ pub struct AuthorityTransferred {
     pub timestamp:     i64,
 }
 
+/// Emitted when the Gini gate blocks a mint attempt.
+/// Indexed by epoch_index for Grafana / off-chain monitoring.
+#[event]
+pub struct InequalityGateBlocked {
+    pub epoch_index:  u64,
+    pub current_gini: u64,
+    pub g_target:     u64,
+    pub slot:         u64,
+    pub timestamp:    i64,
+}
+
 // ── Errors ───────────────────────────────────────────────────────────────────
 
 #[error_code]
@@ -502,4 +565,6 @@ pub enum EmissionsError {
     MintMismatch,
     #[msg("New authority must differ from current authority")]
     SameAuthority,
+    #[msg("Inequality gate closed: reward distribution Gini exceeds target — finalize epoch in qti_developer_credits first")]
+    InequalityGateViolated,
 }

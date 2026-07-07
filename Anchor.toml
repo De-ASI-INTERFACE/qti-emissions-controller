@@ -3,17 +3,19 @@ seeds = true
 skip-lint = false
 
 [programs.mainnet]
-qti_emissions_controller = "EMiSCtRL1QTIDeASIInterface111111111111111111"
+qti_emissions_controller  = "EMiSCtRL1QTIDeASIInterface111111111111111111"
+qti_developer_credits     = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
 
 [programs.localnet]
-qti_emissions_controller = "EMiSCtRL1QTIDeASIInterface111111111111111111"
+qti_emissions_controller  = "EMiSCtRL1QTIDeASIInterface111111111111111111"
+qti_developer_credits     = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 cluster = "mainnet"
-wallet = "~/.config/solana/id.json"
+wallet  = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
@@ -22,5 +24,7 @@ test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 members = ["programs/*"]
 
 # UNIQUE CODE IDENTIFIER: RP-DEASI-EMISSIONS-2026-0627-001
+# INEQUALITY CONTROLLER:  RP-DEASI-INEQUALITY-2026-0707-001
 # Author: Richard Patterson (@De-ASI-INTERFACE)
 # Deployer: CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my
+# qti_developer_credits program ID: 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv

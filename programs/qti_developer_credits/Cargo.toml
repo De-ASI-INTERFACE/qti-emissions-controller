@@ -1,0 +1,23 @@
+[package]
+name            = "qti-developer-credits"
+version         = "0.1.0"
+edition         = "2021"
+description     = "QTI Developer Credits — Gini-based inequality controller. Owned by 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv. Referenced by qti_emissions_controller and governance programs."
+authors         = ["Richard Patterson <@De-ASI-INTERFACE>"]
+license         = "UNLICENSED"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name       = "qti_developer_credits"
+
+[features]
+default = ["no-entrypoint"]
+no-entrypoint = []
+cpi           = ["no-entrypoint"]
+
+[dependencies]
+anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
+
+# UNIQUE CODE IDENTIFIER: RP-DEASI-INEQUALITY-2026-0707-001
+# Author: Richard Patterson (@De-ASI-INTERFACE)
+# Program ID (mainnet): 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv
