@@ -1,101 +1,89 @@
-# QTI Emissions Controller — Anchor Deploy Reference
+# QTI Emissions Controller — Deployment Guide
 
-**Author: Richard Arlie Charles Patterson**
-**Copyright: © 2026 Richard Arlie Charles Patterson**
-**Project: QTI Emissions Controller**
-**Repository: [De-ASI-INTERFACE/qti-emissions-controller](https://github.com/De-ASI-INTERFACE/qti-emissions-controller)**
-**Identifier: RP-DEASI-EMISSIONS-2026-0627-001**
+**Author:** Richard Patterson (@De-ASI-INTERFACE)  
+**Ref:** RP-DEASI-EMISSIONS-2026-0627-001  
+**Program ID:** `EMiSCtRL1QTIDeASIInterface111111111111111111`
 
 ---
 
-## Program Identity
+## 1. Prerequisites
 
-| Field | Value |
-|---|---|
-| Program ID | `EMiSCtRL1QTIDeASIInterface111111111111111111` |
-| Cluster | Mainnet |
-| Deployer | `CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my` |
-| Authority | Squads vault PDA |
-| Mint Authority | `emissions_authority` PDA (no private key) |
-| Unique Code | `RP-DEASI-EMISSIONS-2026-0627-001` |
+- Solana CLI `1.18.x` installed and configured
+- Anchor CLI `0.30.1` installed (`npm i -g @coral-xyz/anchor-cli@0.30.1`)
+- Squads multisig vault created and vault PDA recorded
+- Deployer keypair with sufficient SOL for rent + fees
 
 ---
 
-## Security Properties
-
-1. Per-epoch emission cap enforced on-chain — no runaway inflation
-2. Lifetime total emission cap — hard ceiling, cannot be circumvented
-3. Squads vault PDA is sole reconfiguration authority
-4. `emissions_authority` PDA holds `mint_authority` — no private key exists
-5. Emergency pause/resume controlled exclusively by governance
-6. All arithmetic uses checked operations — no overflow/underflow
-7. Mint authority validated on every `emit_rewards` call
-8. Full on-chain event emission for off-chain monitoring
-
----
-
-## Instructions
-
-| Instruction | Authority | Description |
-|---|---|---|
-| `initialize_config` | Deployer (once) | Set epoch duration, per-epoch cap, lifetime cap |
-| `emit_rewards` | Anyone (rate-limited) | Mint QTI staking rewards to recipient |
-| `update_config` | Squads vault | Adjust rate parameters (cap can only decrease) |
-| `pause_emissions` | Squads vault | Emergency halt |
-| `resume_emissions` | Squads vault | Restore after governance review |
-| `transfer_authority` | Squads vault | Rotate governance to new vault |
-
----
-
-## Deploy Steps
+## 2. Devnet Deployment
 
 ```bash
-# 1. Install dependencies
-yarn install
+# Set cluster
+solana config set --url devnet
 
-# 2. Build the program
+# Build (deterministic)
 anchor build
 
-# 3. Verify program ID matches Anchor.toml
-anchor keys list
+# Record binary checksum before deploy
+sha256sum target/deploy/qti_emissions_controller.so
 
-# 4. Deploy to mainnet
-anchor deploy --provider.cluster mainnet
+# Deploy
+anchor deploy --provider.cluster devnet
 
-# 5. Initialize config (run once after deploy)
-ts-node scripts/initialize_config.ts
-
-# 6. Verify on-chain
-solana program show EMiSCtRL1QTIDeASIInterface111111111111111111
+# Verify with solana-verify
+solana-verify verify-from-repo \
+  --url https://github.com/De-ASI-INTERFACE/qti-emissions-controller \
+  --program-id EMiSCtRL1QTIDeASIInterface111111111111111111
 ```
+
+### Post-Deploy Devnet Checks
+- [ ] Program ID matches `EMiSCtRL1QTIDeASIInterface111111111111111111`
+- [ ] `mint_authority` transferred to `emissions_authority` PDA
+- [ ] Squads vault PDA confirmed as `authority` post-initialization
+- [ ] `initialize` instruction executed successfully (record tx hash below)
+- [ ] Devnet init tx hash: `___________`
 
 ---
 
-## PDA Derivations
+## 3. Squads Multisig Setup
 
-```
-emissions_authority PDA:
-  seeds: [b"emissions_authority"]
-  program: EMiSCtRL1QTIDeASIInterface111111111111111111
-
-emissions_config PDA:
-  seeds: [b"emissions_config", qti_mint.key()]
-  program: EMiSCtRL1QTIDeASIInterface111111111111111111
-```
-
----
-
-## On-Chain Events
-
-| Event | Trigger |
-|---|---|
-| `EmissionsInitialized` | `initialize_config` succeeds |
-| `RewardsEmitted` | `emit_rewards` succeeds |
-| `ConfigUpdated` | `update_config` succeeds |
-| `EmissionsPaused` | `pause_emissions` succeeds |
-| `EmissionsResumed` | `resume_emissions` succeeds |
-| `AuthorityTransferred` | `transfer_authority` succeeds |
+1. Create a new Squads v4 multisig at [https://app.squads.so](https://app.squads.so)
+2. Add all required signers (minimum M-of-N threshold per governance policy)
+3. Record the vault PDA:
+   ```
+   Squads Vault PDA: ___________
+   ```
+4. During program initialization, pass the vault PDA as the `authority` account
+5. Verify on-chain that `emissions_config.authority == vault_pda`
+6. Any `update_config`, `pause`, `transfer_authority` calls must be routed through Squads
 
 ---
 
-*© 2026 Richard Arlie Charles Patterson. All rights reserved under MIT License.*
+## 4. Mainnet Deployment
+
+> ⚠️ **Do not deploy to mainnet until all V3 validation gates (#3, #4, #5) are closed.**
+
+```bash
+solana config set --url mainnet-beta
+anchor build
+sha256sum target/deploy/qti_emissions_controller.so  # must match devnet checksum
+anchor deploy --provider.cluster mainnet-beta
+```
+
+### Mainnet Deploy Record
+- [ ] Binary checksum verified matches devnet
+- [ ] Program ID confirmed on-chain
+- [ ] `mint_authority` transfer tx hash: `___________`
+- [ ] Squads vault set as authority tx hash: `___________`
+- [ ] Mainnet deploy tx hash: `___________`
+- [ ] Grafana monitoring dashboards active
+- [ ] `RewardsEmitted` alert thresholds configured
+
+---
+
+## 5. Versioned Deployment History
+
+| Version | Network | Date | Deploy Tx Hash | Notes |
+|---------|---------|------|----------------|-------|
+| v1.0.0  | devnet  | TBD  | —              | Initial devnet deploy |
+| v1.0.0  | mainnet | TBD  | —              | Pending V3 gate closure |
