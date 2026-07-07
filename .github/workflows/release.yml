@@ -15,7 +15,7 @@ env:
   RUST_VERSION: "1.79.0"
   SOLANA_VERSION: "1.18.22"
   ANCHOR_VERSION: "0.30.1"
-  NODE_VERSION: "20"
+  NODE_VERSION: "24"
 
 jobs:
   verify-build:
@@ -98,9 +98,9 @@ jobs:
 
             ### On-Chain Verification
             ```bash
-            solana-verify verify-from-repo \
-              --url https://api.mainnet-beta.solana.com \
-              --program-id <PROGRAM_ID> \
+            solana-verify verify-from-repo \\
+              --url https://api.mainnet-beta.solana.com \\
+              --program-id <PROGRAM_ID> \\
               https://github.com/De-ASI-INTERFACE/qti-emissions-controller
             ```
           draft: false
