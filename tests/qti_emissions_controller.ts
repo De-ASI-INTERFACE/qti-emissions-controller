@@ -10,14 +10,13 @@
  *   - Unauthorized reconfiguration rejection
  *   - Zero amount rejection (no state mutation)
  *   - Authority transfer + old-key lockout
- *   - Invalid mint authority rejection
- *   - Gini gate open/closed gate enforcement
+ *   - Gini gate enforcement (gate open via initialize_controller)
  *
- *   ── Formal Verification Regression Anchors (INVARIANT_CROSSREF.md) ──
- *   - FV-1: cost_reduction_calc boundary test   (Core.lean theorem)
- *   - FV-2: ZeroAmount / stepMag_zero_of_zero   (Core.lean lemma)
- *   - FV-3: Epoch rollover determinism           (step_phase / nextPhase)
- *   - FV-4: Authority transfer immutability      (step_weight conservation)
+ *   ── Formal Verification Regression Anchors ──
+ *   - FV-1: cost_reduction_calc boundary   (Core.lean theorem)
+ *   - FV-2: ZeroAmount / stepMag_zero_of_zero  (Core.lean lemma)
+ *   - FV-3: Epoch rollover determinism         (step_phase / nextPhase)
+ *   - FV-4: Authority transfer immutability    (step_weight conservation)
  *
  * RP-DEASI-EMISSIONS-2026-0627-001
  * Author: Richard Patterson (@De-ASI-INTERFACE)
@@ -25,7 +24,7 @@
  */
 
 import * as anchor from "@coral-xyz/anchor";
-import { Program, AnchorError } from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
 import {
   createMint,
   createAssociatedTokenAccount,
@@ -40,100 +39,26 @@ import {
 } from "@solana/web3.js";
 import { assert } from "chai";
 import { QtiEmissionsController } from "../target/types/qti_emissions_controller";
+import { QtiDeveloperCredits }   from "../target/types/qti_developer_credits";
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Seeds & Program IDs ───────────────────────────────────────────────────────
 const EMISSIONS_AUTHORITY_SEED  = Buffer.from("emissions_authority");
 const EMISSIONS_CONFIG_SEED     = Buffer.from("emissions_config");
 const CONTROLLER_STATE_SEED     = Buffer.from("developer_credits_state");
-const DEVELOPER_CREDITS_PROGRAM = new PublicKey(
+const DEVELOPER_CREDITS_PROGRAM_ID = new PublicKey(
   "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
 );
 
-// ─── GiniControllerState layout (matches lib.rs GiniControllerState) ─────────
-// Discriminator (8) + _authority (32) + _qti_mint (32) + _epoch_duration_slots (8)
-// + g_target (8) + _k (8) + _theta (8) + current_gini (8) + gini_gate_open (1)
-// + _current_epoch_start (8) + epoch_index (8) = 129 bytes + 8 discriminator = 137
-function buildGiniStateData(gateOpen: boolean, currentGini = 0, gTarget = 5000): Buffer {
-  // Anchor discriminator: sha256("account:GiniControllerState")[0..8]
-  // We write a zeroed discriminator since we're creating the account raw;
-  // anchor's account constraint with `owner` check only validates program ownership,
-  // not the discriminator, when the account is read (not init'd) via Account<>.
-  // However, to satisfy the Anchor deserializer we MUST supply the correct 8-byte discriminator.
-  // We compute it statically: sha256("account:GiniControllerState") first 8 bytes.
-  // Pre-computed: [0x6e, 0x2f, 0x0e, 0x9b, 0xf3, 0xc5, 0x2a, 0x47]
-  const disc = Buffer.from([0x6e, 0x2f, 0x0e, 0x9b, 0xf3, 0xc5, 0x2a, 0x47]);
-  const buf  = Buffer.alloc(137, 0);
-  disc.copy(buf, 0);                          // [0..8]   discriminator
-  // _authority [8..40]  — zero (not read)
-  // _qti_mint  [40..72] — zero (not read)
-  // _epoch_duration_slots [72..80] — zero
-  buf.writeBigUInt64LE(BigInt(g_target), 80); // g_target [80..88]
-  // _k [88..96], _theta [96..104] — zero
-  buf.writeBigUInt64LE(BigInt(currentGini), 104); // current_gini [104..112]
-  buf[112] = gateOpen ? 1 : 0;               // gini_gate_open [112]
-  // _current_epoch_start [113..121], epoch_index [121..129] — zero
-  return buf;
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-async function createGiniMockAccount(
-  provider:  anchor.AnchorProvider,
-  payer:     Keypair,
-  qtiMint:   PublicKey,
-  gateOpen:  boolean,
-  gTarget =  5000,
-  currentGini = 0
-): Promise<PublicKey> {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [CONTROLLER_STATE_SEED, qtiMint.toBuffer()],
-    DEVELOPER_CREDITS_PROGRAM
+async function airdrop(
+  provider: anchor.AnchorProvider,
+  pubkey: PublicKey,
+  sol = 2
+): Promise<void> {
+  const sig = await provider.connection.requestAirdrop(
+    pubkey,
+    sol * LAMPORTS_PER_SOL
   );
-
-  const data       = buildGiniStateData(gateOpen, currentGini, gTarget);
-  const lamports   = await provider.connection.getMinimumBalanceForRentExemption(data.length);
-
-  // If already exists, update data in-place via a write.
-  const existing = await provider.connection.getAccountInfo(pda);
-  if (existing) {
-    // Patch gini_gate_open byte directly.
-    const patchTx = new anchor.web3.Transaction().add(
-      anchor.web3.SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: pda, lamports: 0 })
-    );
-    // We can't easily patch arbitrary account data without a deployed program.
-    // Instead, during tests we always re-create via the allocate+assign+write path
-    // if the account doesn't exist, and accept the gate value from initialization.
-    return pda;
-  }
-
-  // Create account owned by DEVELOPER_CREDITS_PROGRAM with the correct data.
-  const tx = new anchor.web3.Transaction();
-  tx.add(
-    anchor.web3.SystemProgram.createAccountWithSeed({
-      fromPubkey:  payer.publicKey,
-      newAccountPubkey: pda,
-      basePubkey:  payer.publicKey,
-      seed:        "", // PDAs can't use createAccountWithSeed — use allocate+assign
-      lamports,
-      space:       data.length,
-      programId:   DEVELOPER_CREDITS_PROGRAM,
-    })
-  );
-  // Note: PDAs cannot be created with SystemProgram.createAccount directly because
-  // they have no corresponding keypair. In a real localnet environment, the
-  // qti_developer_credits program must be deployed and its initialize_controller
-  // instruction called to create the PDA properly.
-  //
-  // For localnet tests without the credits program deployed, we use
-  // anchor's test-validator --clone-upgradeable-program flag to load the
-  // pre-built qti_developer_credits .so, OR we mock the account by deploying
-  // a stub program. See scripts/setup-localnet.sh for setup instructions.
-  //
-  // The below is the PDA address computation for reference in scripts:
-  return pda;
-}
-
-async function airdrop(provider: anchor.AnchorProvider, pubkey: PublicKey, sol = 2) {
-  const sig = await provider.connection.requestAirdrop(pubkey, sol * LAMPORTS_PER_SOL);
   await provider.connection.confirmTransaction(sig, "confirmed");
 }
 
@@ -142,8 +67,9 @@ describe("qti_emissions_controller", () => {
   const provider  = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program   = anchor.workspace.QtiEmissionsController as Program<QtiEmissionsController>;
-  const authority = provider.wallet as anchor.Wallet;
+  const program        = anchor.workspace.QtiEmissionsController as Program<QtiEmissionsController>;
+  const creditsProgram = anchor.workspace.QtiDeveloperCredits   as Program<QtiDeveloperCredits>;
+  const authority      = provider.wallet as anchor.Wallet;
 
   let qtiMint:            PublicKey;
   let recipientAta:       PublicKey;
@@ -152,28 +78,37 @@ describe("qti_emissions_controller", () => {
   let giniStatePda:       PublicKey;
 
   const EPOCH_SLOTS   = new anchor.BN(216_000);
-  const MAX_PER_EPOCH = new anchor.BN(1_000_000_000);   // 1,000 QTI (9 dec)
-  const TOTAL_CAP     = new anchor.BN(10_000_000_000);  // 10,000 QTI
+  const MAX_PER_EPOCH = new anchor.BN(1_000_000_000);  // 1,000 QTI (9 dec)
+  const TOTAL_CAP     = new anchor.BN(10_000_000_000); // 10,000 QTI
+
+  // Gini controller params — matching G_TARGET_DEFAULT=3500, K_DEFAULT=1000
+  const GINI_EPOCH_SLOTS = new anchor.BN(216_000);
+  const G_TARGET         = new anchor.BN(3_500);
+  const K                = new anchor.BN(1_000);
 
   before(async () => {
+    // ── 1. Derive emissions authority PDA ────────────────────────────────
     [emissionsAuthority] = PublicKey.findProgramAddressSync(
       [EMISSIONS_AUTHORITY_SEED],
       program.programId
     );
 
+    // ── 2. Create QTI mint with emissions_authority PDA as mint_authority ────
     qtiMint = await createMint(
       provider.connection,
       authority.payer as Keypair,
-      emissionsAuthority,
+      emissionsAuthority,  // PDA is mint_authority from birth
       null,
       9
     );
 
+    // ── 3. Derive emissions config PDA ─────────────────────────────────
     [emissionsConfig] = PublicKey.findProgramAddressSync(
       [EMISSIONS_CONFIG_SEED, qtiMint.toBuffer()],
       program.programId
     );
 
+    // ── 4. Create recipient ATA ─────────────────────────────────────────
     recipientAta = await createAssociatedTokenAccount(
       provider.connection,
       authority.payer as Keypair,
@@ -181,18 +116,36 @@ describe("qti_emissions_controller", () => {
       authority.publicKey
     );
 
-    // Derive the Gini controller PDA — must be created by qti_developer_credits
-    // before emit_rewards can be called on mainnet/devnet.
-    // On localnet CI: deploy qti_developer_credits stub or use --clone flag.
+    // ── 5. Derive Gini controller state PDA ───────────────────────────
     [giniStatePda] = PublicKey.findProgramAddressSync(
       [CONTROLLER_STATE_SEED, qtiMint.toBuffer()],
-      DEVELOPER_CREDITS_PROGRAM
+      DEVELOPER_CREDITS_PROGRAM_ID
     );
+
+    // ── 6. Initialize qti_developer_credits controller ───────────────────
+    // This creates the GiniControllerState PDA with gini_gate_open = true
+    // (the default in initialize_controller). Without this, emit_rewards
+    // will fail with AccountOwnedByWrongProgram on the gini_controller_state.
+    await creditsProgram.methods
+      .initializeController(GINI_EPOCH_SLOTS, G_TARGET, K)
+      .accounts({
+        squadsVault:      authority.publicKey, // mock Squads vault in tests
+        qtiMint:          qtiMint,
+        controllerState:  giniStatePda,
+        payer:            authority.publicKey,
+        systemProgram:    SystemProgram.programId,
+      })
+      .rpc();
+
+    // Verify gate is open after initialization
+    const giniState = await creditsProgram.account.inequalityControllerState.fetch(giniStatePda);
+    assert.equal(giniState.giniGateOpen, true, "Gini gate must be open after initialize_controller");
+    assert.equal(giniState.qtiMint.toBase58(), qtiMint.toBase58(), "Gini controller must reference correct mint");
   });
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
+  // ── Account builder helpers ─────────────────────────────────────────────
 
-  /** Build the full accounts object for emit_rewards, injecting the Gini PDA. */
+  /** Full accounts object for emit_rewards — includes giniControllerState. */
   function emitAccounts() {
     return {
       emissionsConfig,
@@ -221,13 +174,13 @@ describe("qti_emissions_controller", () => {
       .rpc();
 
     const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
-    assert.equal(cfg.authority.toBase58(),        authority.publicKey.toBase58());
-    assert.equal(cfg.qtiMint.toBase58(),           qtiMint.toBase58());
+    assert.equal(cfg.authority.toBase58(),         authority.publicKey.toBase58());
+    assert.equal(cfg.qtiMint.toBase58(),            qtiMint.toBase58());
     assert.equal(cfg.epochDurationSlots.toString(), EPOCH_SLOTS.toString());
     assert.equal(cfg.maxEmissionPerEpoch.toString(), MAX_PER_EPOCH.toString());
-    assert.equal(cfg.totalEmissionCap.toString(),  TOTAL_CAP.toString());
-    assert.equal(cfg.totalMinted.toString(),        "0");
-    assert.equal(cfg.paused,                        false);
+    assert.equal(cfg.totalEmissionCap.toString(),   TOTAL_CAP.toString());
+    assert.equal(cfg.totalMinted.toString(),         "0");
+    assert.equal(cfg.paused,                         false);
   });
 
   it("rejects double initialization", async () => {
@@ -248,25 +201,21 @@ describe("qti_emissions_controller", () => {
     }
   });
 
-  // ── emit_rewards (requires giniControllerState account) ─────────────────
-  // NOTE: The following emit_rewards tests require qti_developer_credits to be
-  // deployed on localnet with gini_gate_open = true for the giniStatePda.
-  // Run: scripts/setup-localnet.sh before executing this suite.
-  // In CI, the workflow deploys both programs via --bpf-program flags.
+  // ── emit_rewards ─────────────────────────────────────────────────────────
 
-  it("emits rewards within epoch cap (gate open)", async () => {
-    const amount = new anchor.BN(500_000_000);
+  it("emits rewards within epoch cap (Gini gate open)", async () => {
+    const amount = new anchor.BN(500_000_000); // 500 QTI
     await program.methods.emitRewards(amount).accounts(emitAccounts()).rpc();
 
     const ata = await getAccount(provider.connection, recipientAta);
     assert.equal(ata.amount.toString(), amount.toString());
 
     const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
-    assert.equal(cfg.totalMinted.toString(),       amount.toString());
+    assert.equal(cfg.totalMinted.toString(),        amount.toString());
     assert.equal(cfg.currentEpochMinted.toString(), amount.toString());
   });
 
-  it("rejects zero amount — no state mutation (FV-2 anchor)", async () => {
+  it("rejects zero amount — no state mutation (FV-2)", async () => {
     const cfgBefore = await program.account.emissionsConfig.fetch(emissionsConfig);
     try {
       await program.methods.emitRewards(new anchor.BN(0)).accounts(emitAccounts()).rpc();
@@ -280,6 +229,7 @@ describe("qti_emissions_controller", () => {
   });
 
   it("rejects emission exceeding per-epoch cap", async () => {
+    // 600 QTI would push epoch total to 1,100 QTI > 1,000 QTI cap
     try {
       await program.methods.emitRewards(new anchor.BN(600_000_000)).accounts(emitAccounts()).rpc();
       assert.fail("Expected EpochCapExceeded");
@@ -299,6 +249,7 @@ describe("qti_emissions_controller", () => {
     } catch (e: any) {
       assert.include(e.message, "TotalCapExceeded");
     }
+    // Restore cap
     await program.methods
       .updateConfig(null, null, TOTAL_CAP)
       .accounts({ authority: authority.publicKey, emissionsConfig })
@@ -375,8 +326,7 @@ describe("qti_emissions_controller", () => {
     }
   });
 
-  it("rejects raising total_emission_cap above current (CapBelowMinted path)", async () => {
-    // Setting total_emission_cap BELOW total_minted must fail.
+  it("rejects setting total_emission_cap below total_minted (CapBelowMinted)", async () => {
     try {
       await program.methods
         .updateConfig(null, null, new anchor.BN(1))
@@ -390,7 +340,7 @@ describe("qti_emissions_controller", () => {
 
   // ── transfer_authority ────────────────────────────────────────────────────
 
-  it("transfers authority to new key", async () => {
+  it("transfers authority to new key and back", async () => {
     const newAuth = Keypair.generate();
     await program.methods
       .transferAuthority(newAuth.publicKey)
@@ -423,14 +373,17 @@ describe("qti_emissions_controller", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   describe("FV-1 · cost_reduction_calc boundary (Core.lean theorem)", () => {
-    const SMALL_CAP = new anchor.BN(100_000_000);
+    const SMALL_CAP = new anchor.BN(100_000_000); // 100 QTI
 
     before(async () => {
+      // Set short epoch to trigger rollover, then restore
       await program.methods
         .updateConfig(SMALL_CAP, new anchor.BN(9_000), null)
         .accounts({ authority: authority.publicKey, emissionsConfig })
         .rpc();
+      // Emit 1 unit to trigger epoch rollover (fresh counter)
       await program.methods.emitRewards(new anchor.BN(1)).accounts(emitAccounts()).rpc();
+      // Restore epoch duration
       await program.methods
         .updateConfig(null, EPOCH_SLOTS, null)
         .accounts({ authority: authority.publicKey, emissionsConfig })
@@ -438,13 +391,17 @@ describe("qti_emissions_controller", () => {
     });
 
     it("FV-1a · fills epoch to max_per_epoch - 1 (pre-boundary)", async () => {
-      const cfgBefore = await program.account.emissionsConfig.fetch(emissionsConfig);
+      const cfgBefore  = await program.account.emissionsConfig.fetch(emissionsConfig);
       const fillAmount = SMALL_CAP.sub(cfgBefore.currentEpochMinted).subn(1);
       if (fillAmount.gtn(0)) {
         await program.methods.emitRewards(fillAmount).accounts(emitAccounts()).rpc();
       }
       const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
-      assert.equal(cfg.currentEpochMinted.toString(), SMALL_CAP.subn(1).toString());
+      assert.equal(
+        cfg.currentEpochMinted.toString(),
+        SMALL_CAP.subn(1).toString(),
+        "Pre-boundary: epoch_minted must equal max_per_epoch - 1"
+      );
     });
 
     it("FV-1b · amount=2 rejected at boundary (EpochCapExceeded)", async () => {
@@ -456,7 +413,7 @@ describe("qti_emissions_controller", () => {
       }
     });
 
-    it("FV-1c · amount=1 accepted at exact boundary", async () => {
+    it("FV-1c · amount=1 accepted at exact cap boundary", async () => {
       await program.methods.emitRewards(new anchor.BN(1)).accounts(emitAccounts()).rpc();
       const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
       assert.equal(cfg.currentEpochMinted.toString(), SMALL_CAP.toString());
@@ -471,7 +428,7 @@ describe("qti_emissions_controller", () => {
   });
 
   describe("FV-2 · stepMag_zero_of_zero regression (Core.lean lemma)", () => {
-    it("FV-2a · amount=0 returns ZeroAmount, no state mutation", async () => {
+    it("FV-2a · amount=0 returns ZeroAmount, zero state mutation", async () => {
       const cfgBefore = await program.account.emissionsConfig.fetch(emissionsConfig);
       try {
         await program.methods.emitRewards(new anchor.BN(0)).accounts(emitAccounts()).rpc();
@@ -486,7 +443,7 @@ describe("qti_emissions_controller", () => {
   });
 
   describe("FV-3 · Epoch rollover determinism (step_phase / nextPhase)", () => {
-    it("FV-3a · current_epoch_minted resets on epoch boundary", async () => {
+    it("FV-3a · current_epoch_minted resets on epoch boundary crossing", async () => {
       await program.methods
         .updateConfig(null, new anchor.BN(9_000), null)
         .accounts({ authority: authority.publicKey, emissionsConfig })
@@ -505,7 +462,10 @@ describe("qti_emissions_controller", () => {
     });
 
     it("FV-3b · emission succeeds from clean epoch after rollover", async () => {
-      await program.methods.emitRewards(new anchor.BN(10_000_000)).accounts(emitAccounts()).rpc();
+      await program.methods
+        .emitRewards(new anchor.BN(10_000_000))
+        .accounts(emitAccounts())
+        .rpc();
       const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
       assert.isTrue(cfg.currentEpochMinted.lte(MAX_PER_EPOCH));
       assert.isTrue(cfg.totalMinted.gtn(0));
@@ -522,6 +482,8 @@ describe("qti_emissions_controller", () => {
         .transferAuthority(newAuthority.publicKey)
         .accounts({ authority: authority.publicKey, emissionsConfig })
         .rpc();
+      const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
+      assert.equal(cfg.authority.toBase58(), newAuthority.publicKey.toBase58());
     });
 
     it("FV-4a · OLD authority rejected by update_config (Unauthorized)", async () => {
@@ -558,17 +520,23 @@ describe("qti_emissions_controller", () => {
     });
 
     it("FV-4d · emit_rewards functional under new authority governance", async () => {
-      await program.methods.emitRewards(new anchor.BN(5_000_000)).accounts(emitAccounts()).rpc();
+      await program.methods
+        .emitRewards(new anchor.BN(5_000_000))
+        .accounts(emitAccounts())
+        .rpc();
       const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
       assert.isTrue(cfg.totalMinted.gtn(0));
     });
 
     after(async () => {
+      // Restore original authority
       await program.methods
         .transferAuthority(authority.publicKey)
         .accounts({ authority: newAuthority.publicKey, emissionsConfig })
         .signers([newAuthority])
         .rpc();
+      const cfg = await program.account.emissionsConfig.fetch(emissionsConfig);
+      assert.equal(cfg.authority.toBase58(), authority.publicKey.toBase58());
     });
   });
 });
