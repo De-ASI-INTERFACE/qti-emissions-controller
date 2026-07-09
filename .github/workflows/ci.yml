@@ -33,16 +33,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Solana CLI (1.18.26)
+      # Install Solana CLI AND generate keypair in a single shell block.
+      # $GITHUB_PATH additions only propagate to the NEXT step's shell,
+      # so solana-keygen must be called within the same step that installs it.
+      - name: Install Solana CLI and setup keypair
         run: |
-          sh -c "$(curl -sSfL https://release.solana.com/v1.18.26/install)"
+          set -euo pipefail
+
+          # Install Solana CLI v1.18.26 via anza.xyz (canonical release endpoint)
+          sh -c "$(curl -sSfL https://release.anza.xyz/v1.18.26/install)"
+
+          # Add to PATH for remaining commands in THIS step
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+          # Persist for all subsequent steps
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Setup Solana keypair for CI
-        run: |
+          # Verify installation
+          solana --version
+          solana-keygen --version
+
+          # Generate ephemeral CI keypair
           mkdir -p ~/.config/solana
           solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/id.json
+
+          # Configure CLI for localnet
           solana config set --url http://127.0.0.1:8899
+          solana config get
 
       - name: Install Node.js 24
         uses: actions/setup-node@v4
