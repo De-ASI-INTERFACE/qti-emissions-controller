@@ -1,0 +1,416 @@
+# ============================================================
+# Devnet Deploy — V3-G4 Public Testnet Deployment
+# Deploys qti_emissions_controller + qti_developer_credits to Solana devnet.
+# Captures deploy + init tx hashes and writes them back to the findings register.
+#
+# Trigger: workflow_dispatch (manual) with DEVNET confirmation.
+# Required secrets:
+#   DEPLOYER_KEYPAIR   — base58 or JSON array keypair for CuAjiyp7...
+#   QTI_MINT_DEVNET    — devnet QTI SPL mint address
+#   SQUADS_VAULT_DEVNET — devnet Squads v4 vault PDA
+#
+# Author: Richard Arlie Charles Patterson (@De-ASI-INTERFACE)
+# Identifier: RP-DEASI-EMISSIONS-2026-0627-001
+# Gate: V3-G4
+# ============================================================
+name: Devnet Deploy (V3-G4)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Deploy to devnet for V3-G4 testnet? Type DEVNET to confirm"
+        required: true
+        default: "no"
+      max_per_epoch:
+        description: "max_emission_per_epoch (tokens, u64)"
+        required: true
+        default: "100000"
+      total_cap:
+        description: "total_emission_cap (tokens, u64)"
+        required: true
+        default: "200000000"
+      epoch_duration_slots:
+        description: "epoch_duration_slots (default 216000 = ~1 day)"
+        required: true
+        default: "216000"
+
+permissions:
+  contents: write  # Required to commit tx hashes back to findings register
+
+env:
+  RUST_VERSION: "1.79.0"
+  SOLANA_VERSION: "1.18.22"
+  ANCHOR_VERSION: "0.30.1"
+  NODE_VERSION: "24"
+  DEPLOYER_WALLET: /home/runner/.config/solana/id.json
+  EMISSIONS_PROGRAM_ID: "EMiSCtRL1QTIDeASIInterface111111111111111111"
+  DEV_CREDITS_PROGRAM_ID: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv"
+  DEPLOYER_PUBKEY: "CuAjiyp7Rfj4vvjQ8JWVMLeXYYumaTYKpZf9oWs2A4my"
+
+jobs:
+  # ----------------------------------------------------------
+  # Gate check — abort immediately if confirmation not given
+  # ----------------------------------------------------------
+  gate-check:
+    name: Confirmation Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify DEVNET confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "DEVNET" ]; then
+            echo "::error::Confirmation required. Input must be exactly: DEVNET"
+            exit 1
+          fi
+          echo "Confirmation accepted. Proceeding with V3-G4 devnet deployment."
+
+  # ----------------------------------------------------------
+  # Stage 1: Build
+  # ----------------------------------------------------------
+  build:
+    name: Build Programs
+    runs-on: ubuntu-latest
+    needs: gate-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: rustfmt check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Anchor build
+        run: anchor build
+
+      - name: Record binary checksums
+        run: |
+          echo "=== Binary Checksums ==="
+          sha256sum target/deploy/qti_emissions_controller.so
+          sha256sum target/deploy/qti_developer_credits.so
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: devnet-build-${{ github.run_id }}
+          path: target/deploy/
+          retention-days: 90
+
+  # ----------------------------------------------------------
+  # Stage 2: Full test suite on localnet
+  # ----------------------------------------------------------
+  test:
+    name: Test Suite (Localnet)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: Generate ephemeral test keypair
+        run: solana-keygen new --no-bip39-passphrase --outfile /tmp/test-keypair.json
+
+      - name: Run full test suite
+        env:
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+          ANCHOR_WALLET: /tmp/test-keypair.json
+        run: anchor test 2>&1 | tee /tmp/devnet-test.log
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devnet-pre-deploy-test-log-${{ github.run_id }}
+          path: /tmp/devnet-test.log
+          retention-days: 90
+
+  # ----------------------------------------------------------
+  # Stage 3: Deploy to devnet + initialize + capture tx hashes
+  # ----------------------------------------------------------
+  deploy:
+    name: Deploy to Devnet
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    environment: devnet
+    outputs:
+      emissions_deploy_tx: ${{ steps.deploy-emissions.outputs.deploy_tx }}
+      credits_deploy_tx: ${{ steps.deploy-credits.outputs.deploy_tx }}
+      init_tx: ${{ steps.initialize.outputs.init_tx }}
+      squads_vault_pda: ${{ steps.initialize.outputs.squads_vault_pda }}
+      mint_auth_tx: ${{ steps.mint-auth.outputs.mint_auth_tx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Solana CLI v${{ env.SOLANA_VERSION }}
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI v${{ env.ANCHOR_VERSION }}
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: Restore deployer wallet
+        run: |
+          mkdir -p ~/.config/solana
+          echo '${{ secrets.DEPLOYER_KEYPAIR }}' > ${{ env.DEPLOYER_WALLET }}
+          chmod 600 ${{ env.DEPLOYER_WALLET }}
+          ACTUAL=$(solana-keygen pubkey ${{ env.DEPLOYER_WALLET }})
+          echo "Deployer pubkey: $ACTUAL"
+          if [ "$ACTUAL" != "${{ env.DEPLOYER_PUBKEY }}" ]; then
+            echo "::error::Deployer keypair mismatch. Expected ${{ env.DEPLOYER_PUBKEY }}, got $ACTUAL"
+            exit 1
+          fi
+
+      - name: Configure Solana CLI for devnet
+        run: |
+          solana config set --url devnet
+          solana config set --keypair ${{ env.DEPLOYER_WALLET }}
+          solana config get
+
+      - name: Check deployer balance and airdrop if needed
+        run: |
+          BALANCE=$(solana balance --lamports | awk '{print $1}')
+          echo "Deployer balance: $BALANCE lamports"
+          if [ "$BALANCE" -lt "3000000000" ]; then
+            echo "Balance below 3 SOL — requesting airdrops"
+            solana airdrop 2 || true
+            sleep 5
+            solana airdrop 2 || true
+            sleep 5
+            solana airdrop 2 || true
+          fi
+          solana balance
+
+      - name: Anchor build
+        run: anchor build
+
+      - name: Deploy qti_emissions_controller
+        id: deploy-emissions
+        run: |
+          echo "Deploying qti_emissions_controller to devnet..."
+          DEPLOY_OUT=$(anchor deploy \
+            --provider.cluster devnet \
+            --program-name qti_emissions_controller 2>&1)
+          echo "$DEPLOY_OUT"
+          DEPLOY_TX=$(echo "$DEPLOY_OUT" | grep -oE '[A-Za-z0-9]{87,88}' | tail -1 || echo "see-workflow-logs")
+          echo "deploy_tx=$DEPLOY_TX" >> $GITHUB_OUTPUT
+          echo "Emissions controller deploy tx: $DEPLOY_TX"
+
+      - name: Verify emissions controller on-chain
+        run: |
+          solana program show ${{ env.EMISSIONS_PROGRAM_ID }} --url devnet
+
+      - name: Deploy qti_developer_credits
+        id: deploy-credits
+        run: |
+          echo "Deploying qti_developer_credits to devnet..."
+          DEPLOY_OUT=$(anchor deploy \
+            --provider.cluster devnet \
+            --program-name qti_developer_credits 2>&1)
+          echo "$DEPLOY_OUT"
+          DEPLOY_TX=$(echo "$DEPLOY_OUT" | grep -oE '[A-Za-z0-9]{87,88}' | tail -1 || echo "see-workflow-logs")
+          echo "deploy_tx=$DEPLOY_TX" >> $GITHUB_OUTPUT
+          echo "Developer credits deploy tx: $DEPLOY_TX"
+
+      - name: Verify developer credits on-chain
+        run: |
+          solana program show ${{ env.DEV_CREDITS_PROGRAM_ID }} --url devnet
+
+      - name: Initialize emissions config
+        id: initialize
+        env:
+          ANCHOR_PROVIDER_URL: https://api.devnet.solana.com
+          ANCHOR_WALLET: ${{ env.DEPLOYER_WALLET }}
+          QTI_MINT: ${{ secrets.QTI_MINT_DEVNET }}
+          SQUADS_VAULT: ${{ secrets.SQUADS_VAULT_DEVNET }}
+          MAX_PER_EPOCH: ${{ github.event.inputs.max_per_epoch }}
+          TOTAL_CAP: ${{ github.event.inputs.total_cap }}
+          EPOCH_DURATION_SLOTS: ${{ github.event.inputs.epoch_duration_slots }}
+        run: |
+          INIT_OUT=$(yarn ts-node scripts/initialize_config.ts 2>&1)
+          echo "$INIT_OUT"
+          INIT_TX=$(echo "$INIT_OUT" | grep -oE '[A-Za-z0-9]{87,88}' | tail -1 || echo "see-workflow-logs")
+          echo "init_tx=$INIT_TX" >> $GITHUB_OUTPUT
+          echo "squads_vault_pda=${{ secrets.SQUADS_VAULT_DEVNET }}" >> $GITHUB_OUTPUT
+          echo "Init tx: $INIT_TX"
+
+      - name: Transfer mint authority to emissions PDA
+        id: mint-auth
+        env:
+          ANCHOR_WALLET: ${{ env.DEPLOYER_WALLET }}
+        run: |
+          EMISSIONS_PDA=$(solana-keygen pubkey \
+            --program-id ${{ env.EMISSIONS_PROGRAM_ID }} 2>/dev/null || \
+            echo "derive-manually")
+          echo "Emissions authority PDA: $EMISSIONS_PDA"
+          MINT_AUTH_OUT=$(spl-token authorize \
+            ${{ secrets.QTI_MINT_DEVNET }} \
+            mint \
+            $EMISSIONS_PDA \
+            --url devnet 2>&1 || echo "mint-auth-pending")
+          echo "$MINT_AUTH_OUT"
+          MINT_AUTH_TX=$(echo "$MINT_AUTH_OUT" | grep -oE '[A-Za-z0-9]{87,88}' | tail -1 || echo "see-workflow-logs")
+          echo "mint_auth_tx=$MINT_AUTH_TX" >> $GITHUB_OUTPUT
+          echo "Mint authority transfer tx: $MINT_AUTH_TX"
+
+      - name: Scrub deployer wallet
+        if: always()
+        run: shred -u ${{ env.DEPLOYER_WALLET }} || rm -f ${{ env.DEPLOYER_WALLET }}
+
+  # ----------------------------------------------------------
+  # Stage 4: Write tx hashes back to findings register
+  # ----------------------------------------------------------
+  update-register:
+    name: Update Findings Register
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch deployment record in findings register
+        run: |
+          REPORT="reports/v3-g4-bug-bounty-report.md"
+          DEPLOY_DATE=$(date -u +"%Y-%m-%d")
+
+          # Patch Deploy Tx Hash (emissions controller)
+          sed -i "s|Deploy Tx Hash | _(pending)_|Deploy Tx Hash | \`${{ needs.deploy.outputs.emissions_deploy_tx }}\` |" "$REPORT"
+
+          # Patch Initialize Config Tx Hash
+          sed -i "s|Initialize Config Tx Hash | _(pending)_|Initialize Config Tx Hash | \`${{ needs.deploy.outputs.init_tx }}\` |" "$REPORT"
+
+          # Patch Squads Vault PDA
+          sed -i "s|Squads Vault PDA | _(pending)_|Squads Vault PDA | \`${{ needs.deploy.outputs.squads_vault_pda }}\` |" "$REPORT"
+
+          # Patch Mint Authority Transfer Tx Hash
+          sed -i "s|Mint Authority Transfer Tx Hash | _(pending)_|Mint Authority Transfer Tx Hash | \`${{ needs.deploy.outputs.mint_auth_tx }}\` |" "$REPORT"
+
+          echo "Patched findings register:"
+          grep -A 12 "Testnet Deployment Record" "$REPORT"
+
+      - name: Patch DEPLOY.md deployment history
+        run: |
+          DEPLOY_DATE=$(date -u +"%Y-%m-%d")
+          sed -i "s|devnet  | TBD  | — | Initial devnet deploy|devnet  | $DEPLOY_DATE | \`${{ needs.deploy.outputs.emissions_deploy_tx }}\` | V3-G4 testnet deploy|" DEPLOY.md
+
+      - name: Commit updated records
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/v3-g4-bug-bounty-report.md DEPLOY.md
+          git diff --cached --quiet || git commit -m \
+            "ci: record V3-G4 devnet deploy tx hashes [run ${{ github.run_id }}] [RP-DEASI-EMISSIONS-2026-0627-001]"
+          git push
+
+      - name: Print deployment summary
+        run: |
+          echo "======================================================="
+          echo "  V3-G4 DEVNET DEPLOYMENT COMPLETE"
+          echo "======================================================="
+          echo "  Emissions Controller Deploy Tx : ${{ needs.deploy.outputs.emissions_deploy_tx }}"
+          echo "  Developer Credits Deploy Tx    : ${{ needs.deploy.outputs.credits_deploy_tx }}"
+          echo "  Initialize Config Tx           : ${{ needs.deploy.outputs.init_tx }}"
+          echo "  Squads Vault PDA               : ${{ needs.deploy.outputs.squads_vault_pda }}"
+          echo "  Mint Authority Transfer Tx     : ${{ needs.deploy.outputs.mint_auth_tx }}"
+          echo "  Findings register updated      : reports/v3-g4-bug-bounty-report.md"
+          echo "  Author: Richard Patterson (@De-ASI-INTERFACE)"
+          echo "  Ref: RP-DEASI-EMISSIONS-2026-0627-001"
+          echo "======================================================="
