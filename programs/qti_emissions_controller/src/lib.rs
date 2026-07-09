@@ -29,14 +29,13 @@ declare_id!("EMiSCtRL1QTIDeASIInterface111111111111111111");
 /// Program ID of the qti_developer_credits inequality controller.
 /// This program owns InequalityControllerState and exposes gini_gate_open.
 /// Referenced here for account ownership validation in EmitRewards.
-pub const DEVELOPER_CREDITS_PROGRAM_ID: &str =
-    "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv";
+pub const DEVELOPER_CREDITS_PROGRAM_ID: &str = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv";
 
-pub const EMISSIONS_AUTHORITY_SEED:    &[u8] = b"emissions_authority";
-pub const EMISSIONS_CONFIG_SEED:       &[u8] = b"emissions_config";
+pub const EMISSIONS_AUTHORITY_SEED: &[u8] = b"emissions_authority";
+pub const EMISSIONS_CONFIG_SEED: &[u8] = b"emissions_config";
 /// Seed used by qti_developer_credits to derive InequalityControllerState PDA.
 /// Kept here so EmitRewards can validate the account address without a CPI call.
-pub const CONTROLLER_STATE_SEED:       &[u8] = b"developer_credits_state";
+pub const CONTROLLER_STATE_SEED: &[u8] = b"developer_credits_state";
 
 /// Maximum configurable epoch duration (30 days in slots)
 pub const MAX_EPOCH_DURATION_SLOTS: u64 = 6_480_000;
@@ -52,9 +51,9 @@ pub mod qti_emissions_controller {
     /// transferred to the emissions_authority PDA.
     pub fn initialize_config(
         ctx: Context<InitializeConfig>,
-        epoch_duration_slots:   u64,
+        epoch_duration_slots: u64,
         max_emission_per_epoch: u64,
-        total_emission_cap:     u64,
+        total_emission_cap: u64,
     ) -> Result<()> {
         require!(
             epoch_duration_slots >= MIN_EPOCH_DURATION_SLOTS
@@ -77,27 +76,27 @@ pub mod qti_emissions_controller {
         );
 
         let config = &mut ctx.accounts.emissions_config;
-        config.authority              = ctx.accounts.squads_vault.key();
-        config.qti_mint               = ctx.accounts.qti_mint.key();
-        config.epoch_duration_slots   = epoch_duration_slots;
+        config.authority = ctx.accounts.squads_vault.key();
+        config.qti_mint = ctx.accounts.qti_mint.key();
+        config.epoch_duration_slots = epoch_duration_slots;
         config.max_emission_per_epoch = max_emission_per_epoch;
-        config.total_emission_cap     = total_emission_cap;
-        config.total_minted           = 0;
-        config.current_epoch_start    = Clock::get()?.slot;
-        config.current_epoch_minted   = 0;
-        config.paused                 = false;
-        config.initialized_at         = Clock::get()?.unix_timestamp;
-        config.bump                   = ctx.bumps.emissions_config;
-        config.authority_bump         = ctx.bumps.emissions_authority;
+        config.total_emission_cap = total_emission_cap;
+        config.total_minted = 0;
+        config.current_epoch_start = Clock::get()?.slot;
+        config.current_epoch_minted = 0;
+        config.paused = false;
+        config.initialized_at = Clock::get()?.unix_timestamp;
+        config.bump = ctx.bumps.emissions_config;
+        config.authority_bump = ctx.bumps.emissions_authority;
 
         emit!(EmissionsInitialized {
-            authority:              config.authority,
-            qti_mint:               config.qti_mint,
+            authority: config.authority,
+            qti_mint: config.qti_mint,
             epoch_duration_slots,
             max_emission_per_epoch,
             total_emission_cap,
-            slot:                   Clock::get()?.slot,
-            timestamp:              Clock::get()?.unix_timestamp,
+            slot: Clock::get()?.slot,
+            timestamp: Clock::get()?.unix_timestamp,
         });
 
         msg!(
@@ -127,11 +126,11 @@ pub mod qti_emissions_controller {
         let gate_open = ctx.accounts.gini_controller_state.gini_gate_open;
         if !gate_open {
             emit!(InequalityGateBlocked {
-                epoch_index:  ctx.accounts.gini_controller_state.epoch_index,
+                epoch_index: ctx.accounts.gini_controller_state.epoch_index,
                 current_gini: ctx.accounts.gini_controller_state.current_gini,
-                g_target:     ctx.accounts.gini_controller_state.g_target,
-                slot:         Clock::get()?.slot,
-                timestamp:    Clock::get()?.unix_timestamp,
+                g_target: ctx.accounts.gini_controller_state.g_target,
+                slot: Clock::get()?.slot,
+                timestamp: Clock::get()?.unix_timestamp,
             });
             msg!(
                 "InequalityGateBlocked: gini={} g_target={}",
@@ -146,7 +145,7 @@ pub mod qti_emissions_controller {
         // Epoch rollover: reset per-epoch counter if epoch has elapsed
         let slots_elapsed = clock.slot.saturating_sub(config.current_epoch_start);
         if slots_elapsed >= config.epoch_duration_slots {
-            config.current_epoch_start  = clock.slot;
+            config.current_epoch_start = clock.slot;
             config.current_epoch_minted = 0;
         }
 
@@ -178,8 +177,8 @@ pub mod qti_emissions_controller {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 MintTo {
-                    mint:      ctx.accounts.qti_mint.to_account_info(),
-                    to:        ctx.accounts.recipient_token_account.to_account_info(),
+                    mint: ctx.accounts.qti_mint.to_account_info(),
+                    to: ctx.accounts.recipient_token_account.to_account_info(),
                     authority: ctx.accounts.emissions_authority.to_account_info(),
                 },
                 signer_seeds,
@@ -188,15 +187,15 @@ pub mod qti_emissions_controller {
         )?;
 
         config.current_epoch_minted = new_epoch_total;
-        config.total_minted         = new_total;
+        config.total_minted = new_total;
 
         emit!(RewardsEmitted {
-            recipient:    ctx.accounts.recipient_token_account.key(),
+            recipient: ctx.accounts.recipient_token_account.key(),
             amount,
             total_minted: config.total_minted,
             epoch_minted: config.current_epoch_minted,
-            slot:         clock.slot,
-            timestamp:    clock.unix_timestamp,
+            slot: clock.slot,
+            timestamp: clock.unix_timestamp,
         });
 
         msg!(
@@ -213,8 +212,8 @@ pub mod qti_emissions_controller {
     pub fn update_config(
         ctx: Context<UpdateConfig>,
         new_max_emission_per_epoch: Option<u64>,
-        new_epoch_duration_slots:   Option<u64>,
-        new_total_emission_cap:     Option<u64>,
+        new_epoch_duration_slots: Option<u64>,
+        new_total_emission_cap: Option<u64>,
     ) -> Result<()> {
         let config = &mut ctx.accounts.emissions_config;
 
@@ -237,12 +236,12 @@ pub mod qti_emissions_controller {
         }
 
         emit!(ConfigUpdated {
-            authority:                  config.authority,
+            authority: config.authority,
             new_max_emission_per_epoch: config.max_emission_per_epoch,
-            new_epoch_duration_slots:   config.epoch_duration_slots,
-            new_total_emission_cap:     config.total_emission_cap,
-            slot:                       Clock::get()?.slot,
-            timestamp:                  Clock::get()?.unix_timestamp,
+            new_epoch_duration_slots: config.epoch_duration_slots,
+            new_total_emission_cap: config.total_emission_cap,
+            slot: Clock::get()?.slot,
+            timestamp: Clock::get()?.unix_timestamp,
         });
         Ok(())
     }
@@ -253,7 +252,7 @@ pub mod qti_emissions_controller {
         ctx.accounts.emissions_config.paused = true;
         emit!(EmissionsPaused {
             authority: ctx.accounts.authority.key(),
-            slot:      Clock::get()?.slot,
+            slot: Clock::get()?.slot,
             timestamp: Clock::get()?.unix_timestamp,
         });
         msg!("QTI emissions PAUSED by {}", ctx.accounts.authority.key());
@@ -266,7 +265,7 @@ pub mod qti_emissions_controller {
         ctx.accounts.emissions_config.paused = false;
         emit!(EmissionsResumed {
             authority: ctx.accounts.authority.key(),
-            slot:      Clock::get()?.slot,
+            slot: Clock::get()?.slot,
             timestamp: Clock::get()?.unix_timestamp,
         });
         msg!("QTI emissions RESUMED by {}", ctx.accounts.authority.key());
@@ -288,7 +287,7 @@ pub mod qti_emissions_controller {
         emit!(AuthorityTransferred {
             old_authority,
             new_authority,
-            slot:      Clock::get()?.slot,
+            slot: Clock::get()?.slot,
             timestamp: Clock::get()?.unix_timestamp,
         });
         msg!("Authority transferred: {} -> {}", old_authority, new_authority);
@@ -309,9 +308,9 @@ pub struct InitializeConfig<'info> {
 
     #[account(
         init,
-        payer  = payer,
-        space  = EmissionsConfig::LEN,
-        seeds  = [EMISSIONS_CONFIG_SEED, qti_mint.key().as_ref()],
+        payer = payer,
+        space = EmissionsConfig::LEN,
+        seeds = [EMISSIONS_CONFIG_SEED, qti_mint.key().as_ref()],
         bump
     )]
     pub emissions_config: Account<'info, EmissionsConfig>,
@@ -324,7 +323,7 @@ pub struct InitializeConfig<'info> {
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
-    pub token_program:  Program<'info, Token>,
+    pub token_program: Program<'info, Token>,
 }
 
 /// GiniControllerState is a zero-copy view of the InequalityControllerState
@@ -334,25 +333,25 @@ pub struct InitializeConfig<'info> {
 #[account]
 pub struct GiniControllerState {
     /// Squads vault authority (32)
-    pub _authority:                [u8; 32],
+    pub _authority: [u8; 32],
     /// QTI mint (32)
-    pub _qti_mint:                 [u8; 32],
+    pub _qti_mint: [u8; 32],
     /// epoch_duration_slots (8)
-    pub _epoch_duration_slots:     u64,
-    /// g_target scaled ×10_000 (8)
-    pub g_target:                  u64,
-    /// k scaled ×10_000 (8)
-    pub _k:                        u64,
-    /// theta scaled ×10_000 (8)
-    pub _theta:                    u64,
-    /// current_gini scaled ×10_000 (8)
-    pub current_gini:              u64,
+    pub _epoch_duration_slots: u64,
+    /// g_target scaled x10_000 (8)
+    pub g_target: u64,
+    /// k scaled x10_000 (8)
+    pub _k: u64,
+    /// theta scaled x10_000 (8)
+    pub _theta: u64,
+    /// current_gini scaled x10_000 (8)
+    pub current_gini: u64,
     /// Gate flag — true means emissions are permitted (1)
-    pub gini_gate_open:            bool,
+    pub gini_gate_open: bool,
     /// current_epoch_start slot (8)
-    pub _current_epoch_start:      u64,
+    pub _current_epoch_start: u64,
     /// epoch_index (8)
-    pub epoch_index:               u64,
+    pub epoch_index: u64,
     // histogram, totals, timestamps, flags, bump follow — not read here
 }
 
@@ -360,8 +359,8 @@ pub struct GiniControllerState {
 pub struct EmitRewards<'info> {
     #[account(
         mut,
-        seeds  = [EMISSIONS_CONFIG_SEED, qti_mint.key().as_ref()],
-        bump   = emissions_config.bump,
+        seeds = [EMISSIONS_CONFIG_SEED, qti_mint.key().as_ref()],
+        bump = emissions_config.bump,
         constraint = emissions_config.qti_mint == qti_mint.key()
             @ EmissionsError::MintMismatch
     )]
@@ -370,7 +369,7 @@ pub struct EmitRewards<'info> {
     /// CHECK: PDA signer — no private key
     #[account(
         seeds = [EMISSIONS_AUTHORITY_SEED],
-        bump  = emissions_config.authority_bump
+        bump = emissions_config.authority_bump
     )]
     pub emissions_authority: UncheckedAccount<'info>,
 
@@ -394,9 +393,9 @@ pub struct EmitRewards<'info> {
     /// Validated by seeds — ensures this is the canonical controller for this mint.
     /// Read-only: only gini_gate_open is consumed; never mutated here.
     #[account(
-        seeds  = [CONTROLLER_STATE_SEED, qti_mint.key().as_ref()],
+        seeds = [CONTROLLER_STATE_SEED, qti_mint.key().as_ref()],
         bump,
-        owner  = DEVELOPER_CREDITS_PROGRAM_ID.parse::<Pubkey>().unwrap()
+        owner = DEVELOPER_CREDITS_PROGRAM_ID.parse::<Pubkey>().unwrap()
     )]
     pub gini_controller_state: Account<'info, GiniControllerState>,
 
@@ -409,8 +408,8 @@ pub struct UpdateConfig<'info> {
 
     #[account(
         mut,
-        seeds  = [EMISSIONS_CONFIG_SEED, emissions_config.qti_mint.as_ref()],
-        bump   = emissions_config.bump,
+        seeds = [EMISSIONS_CONFIG_SEED, emissions_config.qti_mint.as_ref()],
+        bump = emissions_config.bump,
         constraint = emissions_config.authority == authority.key()
             @ EmissionsError::Unauthorized
     )]
@@ -423,8 +422,8 @@ pub struct TransferAuthority<'info> {
 
     #[account(
         mut,
-        seeds  = [EMISSIONS_CONFIG_SEED, emissions_config.qti_mint.as_ref()],
-        bump   = emissions_config.bump,
+        seeds = [EMISSIONS_CONFIG_SEED, emissions_config.qti_mint.as_ref()],
+        bump = emissions_config.bump,
         constraint = emissions_config.authority == authority.key()
             @ EmissionsError::Unauthorized
     )]
@@ -435,18 +434,18 @@ pub struct TransferAuthority<'info> {
 
 #[account]
 pub struct EmissionsConfig {
-    pub authority:              Pubkey,
-    pub qti_mint:               Pubkey,
-    pub epoch_duration_slots:   u64,
+    pub authority: Pubkey,
+    pub qti_mint: Pubkey,
+    pub epoch_duration_slots: u64,
     pub max_emission_per_epoch: u64,
-    pub total_emission_cap:     u64,
-    pub total_minted:           u64,
-    pub current_epoch_start:    u64,
-    pub current_epoch_minted:   u64,
-    pub initialized_at:         i64,
-    pub paused:                 bool,
-    pub bump:                   u8,
-    pub authority_bump:         u8,
+    pub total_emission_cap: u64,
+    pub total_minted: u64,
+    pub current_epoch_start: u64,
+    pub current_epoch_minted: u64,
+    pub initialized_at: i64,
+    pub paused: bool,
+    pub bump: u8,
+    pub authority_bump: u8,
 }
 
 impl EmissionsConfig {
@@ -471,46 +470,46 @@ impl EmissionsConfig {
 
 #[event]
 pub struct EmissionsInitialized {
-    pub authority:              Pubkey,
-    pub qti_mint:               Pubkey,
-    pub epoch_duration_slots:   u64,
+    pub authority: Pubkey,
+    pub qti_mint: Pubkey,
+    pub epoch_duration_slots: u64,
     pub max_emission_per_epoch: u64,
-    pub total_emission_cap:     u64,
-    pub slot:                   u64,
-    pub timestamp:              i64,
+    pub total_emission_cap: u64,
+    pub slot: u64,
+    pub timestamp: i64,
 }
 
 #[event]
 pub struct RewardsEmitted {
-    pub recipient:    Pubkey,
-    pub amount:       u64,
+    pub recipient: Pubkey,
+    pub amount: u64,
     pub total_minted: u64,
     pub epoch_minted: u64,
-    pub slot:         u64,
-    pub timestamp:    i64,
+    pub slot: u64,
+    pub timestamp: i64,
 }
 
 #[event]
 pub struct ConfigUpdated {
-    pub authority:                  Pubkey,
+    pub authority: Pubkey,
     pub new_max_emission_per_epoch: u64,
-    pub new_epoch_duration_slots:   u64,
-    pub new_total_emission_cap:     u64,
-    pub slot:                       u64,
-    pub timestamp:                  i64,
+    pub new_epoch_duration_slots: u64,
+    pub new_total_emission_cap: u64,
+    pub slot: u64,
+    pub timestamp: i64,
 }
 
 #[event]
 pub struct EmissionsPaused {
     pub authority: Pubkey,
-    pub slot:      u64,
+    pub slot: u64,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct EmissionsResumed {
     pub authority: Pubkey,
-    pub slot:      u64,
+    pub slot: u64,
     pub timestamp: i64,
 }
 
@@ -518,19 +517,19 @@ pub struct EmissionsResumed {
 pub struct AuthorityTransferred {
     pub old_authority: Pubkey,
     pub new_authority: Pubkey,
-    pub slot:          u64,
-    pub timestamp:     i64,
+    pub slot: u64,
+    pub timestamp: i64,
 }
 
 /// Emitted when the Gini gate blocks a mint attempt.
 /// Indexed by epoch_index for Grafana / off-chain monitoring.
 #[event]
 pub struct InequalityGateBlocked {
-    pub epoch_index:  u64,
+    pub epoch_index: u64,
     pub current_gini: u64,
-    pub g_target:     u64,
-    pub slot:         u64,
-    pub timestamp:    i64,
+    pub g_target: u64,
+    pub slot: u64,
+    pub timestamp: i64,
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────
