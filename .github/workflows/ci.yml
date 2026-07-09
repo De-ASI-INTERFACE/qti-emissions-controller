@@ -61,17 +61,20 @@ jobs:
           solana config set --url http://127.0.0.1:8899
           solana config get
 
+      # NOTE: cache: yarn is disabled until yarn.lock is committed to the repo.
+      # To re-enable: run `yarn install` locally, commit yarn.lock, then restore
+      # cache: yarn here and change `yarn install` below back to
+      # `yarn install --frozen-lockfile`.
       - name: Install Node.js 24
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'yarn'
 
       - name: Install Anchor CLI (0.30.1)
         run: npm install -g @coral-xyz/anchor-cli@0.30.1
 
       - name: Install Node dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install
 
       - name: Rust fmt check
         run: cargo fmt --all -- --check
