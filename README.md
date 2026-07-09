@@ -115,6 +115,62 @@ solana-verify verify-from-repo \
 
 ---
 
+## Testnet Deployment (V3-G4 Public Testnet)
+
+> 🟢 **Status: ACTIVE** | Window: `2026-07-09` – `2026-08-08` (30 calendar days)
+> Bug bounty is open. See [BUG_BOUNTY.md](./BUG_BOUNTY.md) for scope, severity matrix, and submission process.
+
+### Deployed Program Addresses
+
+| Program | Address | Cluster | Explorer |
+|---|---|---|---|
+| `qti_emissions_controller` | `EMiSCtRL1QTIDeASIInterface111111111111111111` | Solana Devnet | [View on SolanaFM](https://solana.fm/address/EMiSCtRL1QTIDeASIInterface111111111111111111?cluster=devnet-alpha) |
+| `qti_developer_credits` | `9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv` | Solana Devnet | [View on SolanaFM](https://solana.fm/address/9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv?cluster=devnet-alpha) |
+
+**Public Devnet RPC:** `https://api.devnet.solana.com`
+
+### Interacting with the Testnet
+
+Community participants are encouraged to interact with governance, emissions, and the vault
+during the testnet window. Use the following to get started:
+
+```bash
+# Configure CLI for devnet
+solana config set --url devnet
+
+# Airdrop devnet SOL
+solana airdrop 2
+
+# Verify emissions controller is deployed
+solana program show EMiSCtRL1QTIDeASIInterface111111111111111111
+
+# Verify developer credits program
+solana program show 9xQeWvG816bUx9EPjHmaT23yvVM2ZWjrpZb9p5vXL5Hv
+```
+
+### Governance Smoke Tests (V3-G4 Requirement)
+
+The V3-G4 gate requires a minimum of **3 external participants** to execute governance
+interactions and submit transaction signatures as evidence. If you are willing to
+participate, please:
+
+1. Interact with governance (proposal creation or voting) on devnet
+2. Submit your transaction signature(s) as a comment on
+   [Issue #4](https://github.com/De-ASI-INTERFACE/qti-emissions-controller/issues/4)
+3. You will be credited in the V3-G4 gate closure report
+
+### Testnet Deployment Record
+
+| Field | Value |
+|---|---|
+| Window Open | `2026-07-09` |
+| Window Close | `2026-08-08` |
+| Deploy Tx Hash | _(to be filled post-deploy)_ |
+| Init Tx Hash | _(to be filled post-init)_ |
+| Squads Vault PDA | _(to be filled post-setup)_ |
+
+---
+
 ## Related Repositories
 
 | Repo | Purpose |
@@ -128,5 +184,5 @@ solana-verify verify-from-repo \
 
 ## Security
 
-See [SECURITY.md](./SECURITY.md) and [docs/MULTISIG_MIGRATION.md](./docs/MULTISIG_MIGRATION.md).
+See [SECURITY.md](./SECURITY.md), [BUG_BOUNTY.md](./BUG_BOUNTY.md), and [docs/MULTISIG_MIGRATION.md](./docs/MULTISIG_MIGRATION.md).
 Org-level audit report: [AUDIT_REPORT.md](https://github.com/De-ASI-INTERFACE/De-ASI-INTERFACE/blob/main/AUDIT_REPORT.md)
